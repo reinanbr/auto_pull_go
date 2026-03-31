@@ -15,6 +15,14 @@ All notable changes to this project will be documented in this file.
 - Backoff hardens after repeated failures (caps to 5 minutes after 5 errors).
 - Multi-repo configs are deprecated; only the first entry is processed when present.
 
+## [v1.0.7] - 2026-03-31
+
+### Added
+- Token can also be supplied via `GITHUB_TOKEN` (env or .env), alongside `AUTOPULL_TOKEN`.
+
+### Changed
+- Docs updated to reflect env-first token flow and `.env` usage; JSON token remains legacy.
+
 ## [v1.0.5] - 2026-03-31
 
 ### Added

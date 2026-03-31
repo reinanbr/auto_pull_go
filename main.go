@@ -59,14 +59,24 @@ func loadDotEnvToken(baseDir string) string {
 		}
 		key := strings.TrimSpace(parts[0])
 		val := strings.TrimSpace(parts[1])
-		if key == "AUTOPULL_TOKEN" {
+		if key == "AUTOPULL_TOKEN" || key == "GITHUB_TOKEN" {
 			return val
 		}
 	}
 	return ""
 }
 
-var version = "v1.0.6"
+func tokenFromEnv() string {
+	if v := os.Getenv("AUTOPULL_TOKEN"); v != "" {
+		return v
+	}
+	if v := os.Getenv("GITHUB_TOKEN"); v != "" {
+		return v
+	}
+	return ""
+}
+
+var version = "v1.0.7"
 var multiRepoWarned bool
 
 const gitTimeout = 15 * time.Second
@@ -92,8 +102,8 @@ func loadConfig(path string) (*Config, error) {
 		cfg.LogFile = "auto_pull.log"
 	}
 
-	// token resolution: prefer env, then .env, then JSON (deprecated)
-	token := os.Getenv("AUTOPULL_TOKEN")
+	// token resolution: prefer env (.env), then JSON (deprecated)
+	token := tokenFromEnv()
 	if token == "" {
 		baseDir := cfg.RepoPath
 		if baseDir == "" {

@@ -58,8 +58,8 @@ Single repo (recommended):
 
 Token from environment: keep `github_token` empty. The token is read from:
 
-1. `AUTOPULL_TOKEN` env var (preferred)
-2. `.env` file alongside your repo, with a line `AUTOPULL_TOKEN=...`
+1. `AUTOPULL_TOKEN` env var (preferred) or `GITHUB_TOKEN` env var (alias)
+2. `.env` file alongside your repo, with a line `AUTOPULL_TOKEN=...` or `GITHUB_TOKEN=...`
 3. `github_token` in JSON (legacy; avoid storing secrets in JSON)
 
 | Field | Description | Default |
@@ -69,15 +69,17 @@ Token from environment: keep `github_token` empty. The token is read from:
 | `check_interval_seconds` | Polling interval in seconds | `5` |
 | `github_token` | GitHub OAuth token (deprecated; use env) | empty |
 | `post_pull_command` | Command to run after each pull | empty |
-| `post_pull_workdir` | Working directory for the post-pull command | `repo_path` |
+| `post_pull_workdir` | Working directory for the post-pull command (defaults to `repo_path` when empty) | `repo_path` |
 | `log_file` | Path to the log file | `auto_pull.log` |
 | `notify_on_pull` | Send a desktop notification on pull | `true` |
 
 Multi-repo configs are deprecated; run one autopull instance per repo with its own config.
 
+Git ignore hygiene: `.gitignore` already ignores `config_auto_pull.json` and `.env`; keep secrets out of git.
+
 Log rotation: the log is rotated around ~5MB by default; override with env `AUTOPULL_LOG_MAX_BYTES` (bytes).
 
-> **Tip**: The config file is re-read on every tick — you can edit it without restarting the daemon. If the repo is dirty (uncommitted changes), autopull will warn and skip the pull.
+> **Tip**: The config file is re-read on every tick — you can edit it without restarting the daemon. If the repo is dirty (uncommitted changes), autopull will warn and skip the pull until clean.
 
 ---
 
@@ -141,20 +143,20 @@ scripts/
 ### Build portable release (`tar.gz`)
 
 ```bash
-./scripts/release-linux.sh v1.0.6
+./scripts/release-linux.sh v1.0.7
 ```
 
 Output example:
 
 ```bash
-dist/auto_pull_linux_amd64_v1.0.6.tar.gz
+dist/auto_pull_linux_amd64_v1.0.7.tar.gz
 ```
 
 ### Install on any Linux distro
 
 ```bash
-tar -xzf dist/auto_pull_linux_amd64_v1.0.0.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.0.6
+tar -xzf dist/auto_pull_linux_amd64_v1.0.7.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.0.7
 sudo ./install.sh
 ```
 
@@ -222,7 +224,7 @@ every N seconds:
 - Backoff: git failures use exponential backoff (cap 5m) per repo.
 - Log rotation: built-in rotation around 5MB (`log_file` → `log_file.1`).
 
-- Git credentials: token is injected via a temporary `GIT_ASKPASS` script and `GIT_TOKEN` env var (no `GIT_PASSWORD` in env; prompt disabled with `GIT_TERMINAL_PROMPT=0`). If `github_token` estiver vazio, é lido de `AUTOPULL_TOKEN`.
+- Git credentials: token is injected via a temporary `GIT_ASKPASS` script and `GIT_TOKEN` env var (no `GIT_PASSWORD` in env; prompt disabled with `GIT_TERMINAL_PROMPT=0`). If `github_token` is empty, it is read from `AUTOPULL_TOKEN`.
 - Timeouts: all git commands run with a 15s timeout; failures are logged.
 - Concurrency: only one pull cycle runs at a time; overlapping ticks are skipped with a warning.
 - Backoff: git failures use exponential backoff (cap 5m) per repo.
@@ -235,9 +237,9 @@ every N seconds:
 ## Quick start (Linux)
 
 ```bash
-./scripts/release-linux.sh v1.0.1
-tar -xzf dist/auto_pull_linux_amd64_v1.0.1.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.0.1
+./scripts/release-linux.sh v1.0.7
+tar -xzf dist/auto_pull_linux_amd64_v1.0.7.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.0.7
 sudo ./install.sh
 ```
 
@@ -252,7 +254,21 @@ autopull
 
 ## Private repositories
 
-Generate a token at **GitHub → Settings → Developer settings → Personal access tokens** with the `repo` scope, then set it in `github_token`.
+Generate a token at **GitHub → Settings → Developer settings → Personal access tokens** with the `repo` scope, then set it via environment (preferred):
+
+```bash
+export AUTOPULL_TOKEN=ghp_your_token_here   # or: export GITHUB_TOKEN=...
+```
+
+Or create a `.env` alongside your repo:
+
+```
+AUTOPULL_TOKEN=ghp_your_token_here
+# or
+GITHUB_TOKEN=ghp_your_token_here
+```
+
+Keep `github_token` empty in JSON to avoid committing secrets.
 
 ---
 
