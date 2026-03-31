@@ -41,7 +41,7 @@ brew install go git
 
 ## Configuration (`config_auto_pull.json`)
 
-Single repo (legacy, still supported):
+Single repo (recommended):
 
 ```json
 {
@@ -56,44 +56,28 @@ Single repo (legacy, still supported):
 }
 ```
 
-Multiple repos (new):
+Token from environment: keep `github_token` empty. The token is read from:
 
-```json
-{
-  "check_interval_seconds": 5,
-  "log_file": "auto_pull.log",
-  "repos": [
-    {
-      "repo_path": "/path/one",
-      "branch": "main",
-      "post_pull_command": "",
-      "notify_on_pull": true
-    },
-    {
-      "repo_path": "/path/two",
-      "branch": "develop",
-      "post_pull_command": "make deploy",
-      "post_pull_workdir": "/path/two",
-      "notify_on_pull": false
-    }
-  ]
-}
-```
-
-Token from environment: if `github_token` is empty, it is read from `AUTOPULL_TOKEN`.
+1. `AUTOPULL_TOKEN` env var (preferred)
+2. `.env` file alongside your repo, with a line `AUTOPULL_TOKEN=...`
+3. `github_token` in JSON (legacy; avoid storing secrets in JSON)
 
 | Field | Description | Default |
 |---|---|---|
 | `repo_path` | Absolute path to the local repository | **required** |
 | `branch` | Branch to monitor | `main` |
 | `check_interval_seconds` | Polling interval in seconds | `5` |
-| `github_token` | GitHub OAuth token (for private repos) | empty |
+| `github_token` | GitHub OAuth token (deprecated; use env) | empty |
 | `post_pull_command` | Command to run after each pull | empty |
 | `post_pull_workdir` | Working directory for the post-pull command | `repo_path` |
 | `log_file` | Path to the log file | `auto_pull.log` |
 | `notify_on_pull` | Send a desktop notification on pull | `true` |
 
-> **Tip**: The config file is re-read on every tick — you can edit it without restarting the daemon.
+Multi-repo configs are deprecated; run one autopull instance per repo with its own config.
+
+Log rotation: the log is rotated around ~5MB by default; override with env `AUTOPULL_LOG_MAX_BYTES` (bytes).
+
+> **Tip**: The config file is re-read on every tick — you can edit it without restarting the daemon. If the repo is dirty (uncommitted changes), autopull will warn and skip the pull.
 
 ---
 
@@ -157,20 +141,20 @@ scripts/
 ### Build portable release (`tar.gz`)
 
 ```bash
-./scripts/release-linux.sh v1.0.5
+./scripts/release-linux.sh v1.0.6
 ```
 
 Output example:
 
 ```bash
-dist/auto_pull_linux_amd64_v1.0.5.tar.gz
+dist/auto_pull_linux_amd64_v1.0.6.tar.gz
 ```
 
 ### Install on any Linux distro
 
 ```bash
 tar -xzf dist/auto_pull_linux_amd64_v1.0.0.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.0.5
+cd /tmp/auto_pull_linux_amd64_v1.0.6
 sudo ./install.sh
 ```
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -38,7 +40,34 @@ type RepoConfig struct {
 	NotifyOnPull    bool   `json:"notify_on_pull"`
 }
 
-var version = "v1.0.5"
+func loadDotEnvToken(baseDir string) string {
+	f, err := os.Open(filepath.Join(baseDir, ".env"))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		if key == "AUTOPULL_TOKEN" {
+			return val
+		}
+	}
+	return ""
+}
+
+var version = "v1.0.6"
+var multiRepoWarned bool
 
 const gitTimeout = 15 * time.Second
 
@@ -63,11 +92,19 @@ func loadConfig(path string) (*Config, error) {
 		cfg.LogFile = "auto_pull.log"
 	}
 
-	if cfg.GithubToken == "" {
-		if envTok := os.Getenv("AUTOPULL_TOKEN"); envTok != "" {
-			cfg.GithubToken = envTok
+	// token resolution: prefer env, then .env, then JSON (deprecated)
+	token := os.Getenv("AUTOPULL_TOKEN")
+	if token == "" {
+		baseDir := cfg.RepoPath
+		if baseDir == "" {
+			baseDir = filepath.Dir(path)
 		}
+		token = loadDotEnvToken(baseDir)
 	}
+	if token == "" {
+		token = cfg.GithubToken // legacy fallback
+	}
+	cfg.GithubToken = token
 	return &cfg, nil
 }
 
@@ -81,7 +118,7 @@ type Logger struct {
 }
 
 func newLogger(logPath string) (*Logger, error) {
-	if err := rotateIfLarge(logPath, 5*1024*1024); err != nil {
+	if err := rotateIfLarge(logPath, getLogMaxBytes()); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -125,6 +162,19 @@ func rotateIfLarge(path string, maxBytes int64) error {
 		return err
 	}
 	return nil
+}
+
+func getLogMaxBytes() int64 {
+	const defaultSize = int64(5 * 1024 * 1024)
+	raw := os.Getenv("AUTOPULL_LOG_MAX_BYTES")
+	if raw == "" {
+		return defaultSize
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v <= 0 {
+		return defaultSize
+	}
+	return v
 }
 
 // ─────────────────────────────────────────────
@@ -268,6 +318,15 @@ func watch(ctx context.Context, cfgPath string) {
 		os.Exit(1)
 	}
 
+	primaryRepo := cfg.RepoPath
+	if primaryRepo == "" && len(cfg.Repos) > 0 {
+		primaryRepo = cfg.Repos[0].RepoPath
+	}
+	if err := ensureGitRepo(primaryRepo); err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
+		os.Exit(1)
+	}
+
 	logPath := cfg.LogFile
 	if !filepath.IsAbs(logPath) {
 		logPath = filepath.Join(filepath.Dir(cfgPath), logPath)
@@ -280,10 +339,16 @@ func watch(ctx context.Context, cfgPath string) {
 	}
 	defer l.close()
 
+	displayRepo := primaryRepo
+	displayBranch := cfg.Branch
+	if len(cfg.Repos) > 0 && cfg.Repos[0].Branch != "" {
+		displayBranch = cfg.Repos[0].Branch
+	}
+
 	l.info("═══════════════════════════════════════════")
 	l.info("          auto_pull started")
-	l.info(fmt.Sprintf("  repo    : %s", cfg.RepoPath))
-	l.info(fmt.Sprintf("  branch  : %s", cfg.Branch))
+	l.info(fmt.Sprintf("  repo    : %s", displayRepo))
+	l.info(fmt.Sprintf("  branch  : %s", displayBranch))
 	l.info(fmt.Sprintf("  interval: %ds", cfg.CheckIntervalSeconds))
 	l.info(fmt.Sprintf("  log     : %s", logPath))
 	if cfg.PostPullCommand != "" {
@@ -322,7 +387,7 @@ func watch(ctx context.Context, cfgPath string) {
 				cfg = newCfg
 			}
 
-			repos := buildRepos(cfg)
+			repos := buildRepos(cfg, l)
 			now := time.Now()
 
 			for _, repo := range repos {
@@ -348,6 +413,34 @@ type repoState struct {
 	backoffUntil      time.Time
 }
 
+func shortHash(s string) string {
+	if len(s) >= 7 {
+		return s[:7]
+	}
+	return s
+}
+
+func ensureGitRepo(path string) error {
+	if path == "" {
+		return fmt.Errorf("repo_path is required")
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("repo_path not accessible: %w", err)
+	}
+	if _, err := runGit(path, "", "rev-parse", "--is-inside-work-tree"); err != nil {
+		return fmt.Errorf("not a git repo: %w", err)
+	}
+	return nil
+}
+
+func isRepoDirty(path string) bool {
+	out, err := runGit(path, "", "status", "--porcelain")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) != ""
+}
+
 type RepoWork struct {
 	RepoPath        string
 	Branch          string
@@ -356,26 +449,28 @@ type RepoWork struct {
 	NotifyOnPull    bool
 }
 
-func buildRepos(cfg *Config) []RepoWork {
+func buildRepos(cfg *Config, l *Logger) []RepoWork {
 	if len(cfg.Repos) == 0 {
 		return []RepoWork{singleRepoFromLegacy(cfg)}
 	}
 
-	repos := make([]RepoWork, 0, len(cfg.Repos))
-	for _, r := range cfg.Repos {
-		branch := r.Branch
-		if branch == "" {
-			branch = "main"
-		}
-		repos = append(repos, RepoWork{
-			RepoPath:        r.RepoPath,
-			Branch:          branch,
-			PostPullCommand: r.PostPullCommand,
-			PostPullWorkdir: r.PostPullWorkdir,
-			NotifyOnPull:    r.NotifyOnPull,
-		})
+	if l != nil && !multiRepoWarned {
+		l.warn("multi-repo config is deprecated; processing only the first entry")
+		multiRepoWarned = true
 	}
-	return repos
+
+	r := cfg.Repos[0]
+	branch := r.Branch
+	if branch == "" {
+		branch = "main"
+	}
+	return []RepoWork{{
+		RepoPath:        r.RepoPath,
+		Branch:          branch,
+		PostPullCommand: r.PostPullCommand,
+		PostPullWorkdir: r.PostPullWorkdir,
+		NotifyOnPull:    r.NotifyOnPull,
+	}}
 }
 
 func singleRepoFromLegacy(cfg *Config) RepoWork {
@@ -396,15 +491,28 @@ func processRepo(repo RepoWork, token string, l *Logger, st *repoState) {
 	local, err := localCommit(repo.RepoPath)
 	if err != nil {
 		st.consecutiveErrors++
-		st.backoffUntil = time.Now().Add(backoffDuration(st.consecutiveErrors))
+		delay := backoffDuration(st.consecutiveErrors)
+		if st.consecutiveErrors >= 5 {
+			delay = 5 * time.Minute
+		}
+		st.backoffUntil = time.Now().Add(delay)
 		l.errLog(fmt.Sprintf("%s: git rev-parse (local) failed (%dx): %v", repo.RepoPath, st.consecutiveErrors, err))
+		return
+	}
+
+	if isRepoDirty(repo.RepoPath) {
+		l.warn(fmt.Sprintf("%s: working tree has uncommitted changes; skipping pull", repo.RepoPath))
 		return
 	}
 
 	remote, err := remoteCommit(repo.RepoPath, repo.Branch, token)
 	if err != nil {
 		st.consecutiveErrors++
-		st.backoffUntil = time.Now().Add(backoffDuration(st.consecutiveErrors))
+		delay := backoffDuration(st.consecutiveErrors)
+		if st.consecutiveErrors >= 5 {
+			delay = 5 * time.Minute
+		}
+		st.backoffUntil = time.Now().Add(delay)
 		l.errLog(fmt.Sprintf("%s: git fetch failed (%dx): %v", repo.RepoPath, st.consecutiveErrors, err))
 		return
 	}
@@ -415,7 +523,7 @@ func processRepo(repo RepoWork, token string, l *Logger, st *repoState) {
 		return
 	}
 
-	l.ok(fmt.Sprintf("%s: new commit detected: %s → %s", repo.RepoPath, local[:7], remote[:7]))
+	l.ok(fmt.Sprintf("%s: new commit detected: %s → %s", repo.RepoPath, shortHash(local), shortHash(remote)))
 
 	out, err := pull(repo.RepoPath, repo.Branch, token)
 	if err != nil {

@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.6] - 2026-03-31
+
+### Added
+- Token loading from `.env` (AUTOPULL_TOKEN) in the repo directory; env wins over JSON.
+- Log rotation size configurable via env `AUTOPULL_LOG_MAX_BYTES` (default ~5MB).
+- Repo validation at startup to fail fast if the path is not a git repo.
+
+### Changed
+- Dirty working tree now skips pull with a clear warning (no accidental stash/pop).
+- Safer hash rendering avoids panics on short hashes.
+- Backoff hardens after repeated failures (caps to 5 minutes after 5 errors).
+- Multi-repo configs are deprecated; only the first entry is processed when present.
+
 ## [v1.0.5] - 2026-03-31
 
 ### Added
