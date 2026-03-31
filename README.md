@@ -26,9 +26,9 @@ curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.
 Manual install (from local build artifact):
 
 ```bash
-./scripts/release-linux.sh v1.1.1
-tar -xzf dist/auto_pull_linux_amd64_v1.1.1.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.1.1
+./scripts/release-linux.sh v1.1.2
+tar -xzf dist/auto_pull_linux_amd64_v1.1.2.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.1.2
 sudo ./install.sh
 ```
 
@@ -176,11 +176,11 @@ Environment=AUTOPULL_TOKEN=ghp_xxxxxxxxxxxx
 
 ```bash
 # build portable tar.gz
-./scripts/release-linux.sh v1.1.1
+./scripts/release-linux.sh v1.1.2
 
 # install
-tar -xzf dist/auto_pull_linux_amd64_v1.1.1.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.1.1
+tar -xzf dist/auto_pull_linux_amd64_v1.1.2.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.1.2
 sudo ./install.sh
 
 # uninstall

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.2] - 2026-04-01
+
+### Added
+- Installer now falls back to `go install github.com/reinanbr/auto_pull_go@<version>` when a release binary is missing, avoiding 404s.
+
+### Changed
+- Version bumped to v1.1.2.
+
 ## [v1.1.1] - 2026-04-01
 
 ### Added

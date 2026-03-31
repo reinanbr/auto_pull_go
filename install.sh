@@ -120,16 +120,41 @@ fi
 
 # ─── download ──────────────────────────────────────────────
 
+cleanup_tmp() {
+    if [ -n "$TMP" ] && [ -f "$TMP" ]; then
+        rm -f "$TMP"
+    fi
+}
+
+TMP=""
+trap cleanup_tmp EXIT
+
 if [ "$ACTION" = "install" ]; then
     FILENAME="${BINARY}_${os}_${arch}"
     URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
 
     TMP="$(mktemp)"
-    trap 'rm -f "$TMP"' EXIT
 
     info "Downloading ${FILENAME} (${VERSION})..."
-    curl -fsSL --progress-bar "$URL" -o "$TMP" \
-        || die "Download failed — check that release ${VERSION} has a binary for ${os}/${arch}:\n  ${URL}"
+    if ! curl -fsSL --progress-bar "$URL" -o "$TMP"; then
+        warn "Download failed — checking for local build fallback"
+        rm -f "$TMP"
+        TMP=""
+        if command -v go >/dev/null 2>&1; then
+            info "Building from source via go install (requires Go)"
+            GO_BIN="$(go env GOBIN)"
+            if [ -z "$GO_BIN" ]; then
+                GO_BIN="$(go env GOPATH)/bin"
+            fi
+            GO111MODULE=on go install "github.com/reinanbr/auto_pull_go@${VERSION}" \
+                || die "go install failed; please install Go 1.21+ or provide a release binary"
+            TMP="${GO_BIN}/${BINARY}"
+            [ -f "$TMP" ] || die "go install succeeded but ${TMP} not found"
+            ok "Built from source at ${TMP}"
+        else
+            die "Download failed and Go is not available to build from source:\n  ${URL}"
+        fi
+    fi
 
     chmod +x "$TMP"
 
