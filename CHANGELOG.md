@@ -47,3 +47,12 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - README documenta suporte de OS, CI, multi-repo e config exemplo no root.
+
+## [v1.0.4] - 2026-03-31
+
+### Added
+- run.sh: flag `--config` e suporte a caminho posicional de config.
+
+### Changed
+- run.sh: daemon não redireciona log (evita duplicação); stop espera término com timeout.
+- go.mod: módulo agora é `github.com/reinanbr/auto_pull_go`.

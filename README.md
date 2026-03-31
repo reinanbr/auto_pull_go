@@ -19,7 +19,6 @@ auto_pull/
 ├── main.go                  ← main source code (Go)
 ├── go.mod                   ← Go module file
 ├── run.sh                   ← build / process manager script
-└── config_auto_pull.json    ← your configuration
 ├── config_auto_pull.example.json
 └── (local) config_auto_pull.json is ignored — keep your real config out of git
 ```
@@ -106,10 +105,10 @@ Token via ambiente: se `github_token` estiver vazio, é lido de `AUTOPULL_TOKEN`
 chmod +x run.sh
 
 # Run in the foreground (live logs)
-./run.sh
+./run.sh [--config path/to/config.json]
 
 # Run as a background daemon
-./run.sh --daemon
+./run.sh --daemon [--config path/to/config.json]
 
 # Stop the daemon
 ./run.sh --stop
@@ -127,6 +126,7 @@ Or directly with Go:
 go build -o auto_pull main.go
 ./auto_pull                               # uses local config_auto_pull.json
 ./auto_pull /other/path/config.json
+./auto_pull --version
 ```
 
 ### Global command (installed)

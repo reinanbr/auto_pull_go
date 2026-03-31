@@ -12,7 +12,8 @@
 set -euo pipefail
 
 BINARY="./auto_pull"
-CONFIG="config_auto_pull.json"
+CONFIG_DEFAULT="config_auto_pull.json"
+CONFIG="$CONFIG_DEFAULT"
 PID_FILE=".auto_pull.pid"
 
 # ── colours ──────────────────────────────────────────────────
@@ -63,10 +64,11 @@ run_daemon() {
     fi
   fi
 
-  nohup "$BINARY" "$CONFIG" >> auto_pull.log 2>&1 &
+  # binary already writes to its configured log; avoid double redirection
+  nohup "$BINARY" "$CONFIG" >/dev/null 2>&1 &
   echo $! > "$PID_FILE"
   ok "auto_pull started in background (PID $(cat $PID_FILE))"
-  info "Log file: auto_pull.log"
+  info "Log handled by auto_pull (see log_file in $CONFIG)"
 }
 
 # ── stop ─────────────────────────────────────────────────────
@@ -76,14 +78,23 @@ stop_daemon() {
     return
   fi
   pid=$(cat "$PID_FILE")
-  if kill -0 "$pid" 2>/dev/null; then
-    kill "$pid"
-    rm -f "$PID_FILE"
-    ok "auto_pull (PID $pid) stopped."
-  else
+  if ! kill -0 "$pid" 2>/dev/null; then
     warn "Process PID $pid no longer exists."
     rm -f "$PID_FILE"
+    return
   fi
+
+  kill "$pid" 2>/dev/null || true
+  for _ in {1..20}; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      rm -f "$PID_FILE"
+      ok "auto_pull (PID $pid) stopped."
+      return
+    fi
+    sleep 0.25
+  done
+
+  warn "Process PID $pid did not stop within timeout; leaving PID file for inspection."
 }
 
 # ── status ───────────────────────────────────────────────────
@@ -103,14 +114,27 @@ status() {
 # ── entry point ──────────────────────────────────────────────
 check_deps
 
-case "${1:-}" in
-  --build)   build ;;
-  --daemon)  run_daemon ;;
-  --stop)    stop_daemon ;;
-  --status)  status ;;
-  --help|-h)
-    echo -e "${BOLD}Usage:${RESET} $0 [--build | --daemon | --stop | --status | --help]"
-    echo "  (no flag)  compile and run in the foreground"
-    ;;
-  *) run_fg ;;
-esac
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config)
+      CONFIG="$2"; shift 2 ;;
+    --build)
+      build; exit 0 ;;
+    --daemon)
+      run_daemon; exit 0 ;;
+    --stop)
+      stop_daemon; exit 0 ;;
+    --status)
+      status; exit 0 ;;
+    --help|-h)
+      echo -e "${BOLD}Usage:${RESET} $0 [--build | --daemon | --stop | --status | --config <file> | --help]"
+      echo "  (no flag)  compile and run in the foreground"
+      exit 0 ;;
+    --*)
+      err "Unknown flag: $1"; exit 1 ;;
+    *)
+      CONFIG="$1"; shift; break ;;
+  esac
+done
+
+run_fg
