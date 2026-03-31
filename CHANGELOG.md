@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.1] - 2026-04-01
+
+### Added
+- Single-command installer via curl (`install.sh`) that auto-detects Linux/macOS and downloads the latest release binary to `/usr/local/bin/autopull`.
+- Uninstall flag in the installer: `sh -s -- uninstall` removes the installed binary.
+
+### Changed
+- README documents the curl installer/uninstaller alongside manual and source install flows.
+
 ## [v1.1.0] - 2026-04-01
 
 ### Added

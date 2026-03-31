@@ -1,9 +1,20 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+# autopull — bundle installer
+# Installs the autopull binary from an extracted release bundle.
+#
+# Usage:
+#   sudo ./install.sh              # install
+#   sudo ./install.sh --dry-run   # preview what would be done
+#   sudo ./install.sh --help      # show this help
+#   sudo ./install.sh --purge     # remove all installed files and dirs
+
+set -e
+
+# ─── paths ─────────────────────────────────────────────────
 
 APP_NAME="auto_pull"
-BIN_DEST="/usr/local/bin/${APP_NAME}"
 CMD_NAME="autopull"
+BIN_DEST="/usr/local/bin/${APP_NAME}"
 CMD_DEST="/usr/local/bin/${CMD_NAME}"
 CFG_DIR="/etc/${APP_NAME}"
 CFG_FILE="${CFG_DIR}/config_auto_pull.json"
@@ -11,91 +22,186 @@ LOG_DIR="/var/log/${APP_NAME}"
 LOG_FILE="${LOG_DIR}/auto_pull.log"
 SYSTEMD_UNIT="/etc/systemd/system/${APP_NAME}.service"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_SRC="${SCRIPT_DIR}/${APP_NAME}"
 CFG_EXAMPLE="${SCRIPT_DIR}/config_auto_pull.example.json"
 UNIT_SRC="${SCRIPT_DIR}/${APP_NAME}.service"
 
-require_root() {
-  if [[ "${EUID}" -ne 0 ]]; then
-    if command -v sudo >/dev/null 2>&1; then
-      exec sudo bash "$0" "$@"
-    fi
-    echo "[ERROR] run as root or install sudo" >&2
-    exit 1
-  fi
-}
+# ─── flags ─────────────────────────────────────────────────
 
-main() {
-  require_root "$@"
+DRY_RUN=0
+PURGE=0
 
-  if [[ ! -f "${BIN_SRC}" ]]; then
-    echo "[ERROR] missing binary: ${BIN_SRC}" >&2
-    echo "Build first (go build -o packaging/linux/auto_pull main.go) or use release bundle." >&2
-    exit 1
-  fi
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)  DRY_RUN=1 ;;
+        --purge)    PURGE=1 ;;
+        --help|-h)
+            cat <<EOF
+autopull bundle installer
 
-  if [[ ! -f "${CFG_EXAMPLE}" ]]; then
-    echo "[ERROR] missing config example: ${CFG_EXAMPLE}" >&2
-    exit 1
-  fi
+Usage:
+  sudo ./install.sh              install autopull system-wide
+  sudo ./install.sh --dry-run   preview actions without making changes
+  sudo ./install.sh --purge     remove all installed files
+  sudo ./install.sh --help      show this help
 
-  install -Dm755 "${BIN_SRC}" "${BIN_DEST}"
-  cat > "${CMD_DEST}" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-BIN="/usr/local/bin/auto_pull"
-LOCAL_CFG="$(pwd)/config_auto_pull.json"
-GLOBAL_CFG="/etc/auto_pull/config_auto_pull.json"
-
-if [[ "$#" -gt 0 ]]; then
-  exec "${BIN}" "$@"
-fi
-
-if [[ -f "${LOCAL_CFG}" ]]; then
-  exec "${BIN}" "${LOCAL_CFG}"
-fi
-
-if [[ -f "${GLOBAL_CFG}" ]]; then
-  exec "${BIN}" "${GLOBAL_CFG}"
-fi
-
-echo "[ERROR] config_auto_pull.json not found in current directory or /etc/auto_pull" >&2
-echo "Usage: autopull [path/to/config_auto_pull.json]" >&2
-exit 1
+Installs to:
+  ${BIN_DEST}       binary
+  ${CMD_DEST}       global command (symlink to binary)
+  ${CFG_FILE}       default config (created from example if missing)
+  ${LOG_FILE}       log file
+  ${SYSTEMD_UNIT}   systemd unit (when systemd is available)
 EOF
-  chmod 0755 "${CMD_DEST}"
-  install -d "${CFG_DIR}" "${LOG_DIR}"
+            exit 0
+            ;;
+        *)
+            printf 'Unknown option: %s\n' "$arg" >&2
+            printf "Run './install.sh --help' for usage.\n" >&2
+            exit 1
+            ;;
+    esac
+done
 
-  if [[ ! -f "${CFG_FILE}" ]]; then
-    install -Dm644 "${CFG_EXAMPLE}" "${CFG_FILE}"
-    echo "[INFO] created default config: ${CFG_FILE}"
-  else
-    echo "[INFO] keeping existing config: ${CFG_FILE}"
-  fi
+# ─── helpers ───────────────────────────────────────────────
 
-  touch "${LOG_FILE}"
-  chmod 0644 "${LOG_FILE}"
+info() { printf '  \033[1;34m::\033[0m %s\n' "$*"; }
+ok()   { printf '  \033[1;32m+\033[0m  %s\n' "$*"; }
+warn() { printf '  \033[1;33m!\033[0m  %s\n' "$*"; }
+die()  { printf '  \033[1;31mx\033[0m  %s\n' "$*" >&2; exit 1; }
+skip() { printf '  \033[2m-  %s (dry-run)\033[0m\n' "$*"; }
 
-  if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
-    if [[ -f "${UNIT_SRC}" ]]; then
-      install -Dm644 "${UNIT_SRC}" "${SYSTEMD_UNIT}"
-      systemctl daemon-reload
-      systemctl enable --now "${APP_NAME}.service"
-      echo "[OK] systemd service enabled: ${APP_NAME}.service"
+run() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        skip "$*"
     else
-      echo "[WARN] ${UNIT_SRC} not found; skipping systemd unit install"
+        "$@"
     fi
-  else
-    echo "[WARN] systemd not detected; run manually: ${BIN_DEST} ${CFG_FILE}"
-  fi
-
-  echo "[OK] installation complete"
-  echo "[INFO] binary: ${BIN_DEST}"
-  echo "[INFO] command: ${CMD_DEST}"
-  echo "[INFO] config: ${CFG_FILE}"
-  echo "[INFO] log: ${LOG_FILE}"
 }
 
-main "$@"
+# ─── root check ────────────────────────────────────────────
+
+if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+    die "Must be run as root. Try: sudo ./install.sh"
+fi
+
+# ─── purge ─────────────────────────────────────────────────
+
+if [ "$PURGE" -eq 1 ]; then
+    printf '\n\033[1mRemoving autopull...\033[0m\n\n'
+
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl is-active --quiet "${APP_NAME}.service" 2>/dev/null \
+            && run systemctl stop "${APP_NAME}.service" || true
+        systemctl is-enabled --quiet "${APP_NAME}.service" 2>/dev/null \
+            && run systemctl disable "${APP_NAME}.service" || true
+        run systemctl daemon-reload
+    fi
+
+    for path in "$BIN_DEST" "$CMD_DEST" "$SYSTEMD_UNIT"; do
+        [ -e "$path" ] && run rm -f "$path" && ok "Removed $path" || true
+    done
+
+    for dir in "$CFG_DIR" "$LOG_DIR"; do
+        [ -d "$dir" ] && run rm -rf "$dir" && ok "Removed $dir" || true
+    done
+
+    printf '\n'
+    ok "autopull removed."
+    exit 0
+fi
+
+# ─── pre-flight ────────────────────────────────────────────
+
+printf '\n\033[1mInstalling autopull...\033[0m\n\n'
+
+[ -f "${BIN_SRC}" ] || die "Binary not found: ${BIN_SRC}
+         Build it first:  go build -o packaging/linux/auto_pull main.go
+         Or download a release bundle from:
+         https://github.com/reinanbr/auto_pull_go/releases"
+
+[ -f "${CFG_EXAMPLE}" ] || die "Config example not found: ${CFG_EXAMPLE}"
+
+# verify sha256 checksum if a checksum file is present in the bundle
+CHECKSUM_FILE="${SCRIPT_DIR}/sha256sums.txt"
+if [ -f "$CHECKSUM_FILE" ]; then
+    info "Verifying checksum..."
+    if command -v sha256sum >/dev/null 2>&1; then
+        if (cd "$SCRIPT_DIR" && sha256sum --check --ignore-missing "$CHECKSUM_FILE" >/dev/null 2>&1); then
+            ok "Checksum OK"
+        else
+            die "Checksum mismatch — binary may be corrupted. Re-download the release bundle."
+        fi
+    else
+        warn "sha256sum not found — skipping checksum verification"
+    fi
+fi
+
+# ─── binary ────────────────────────────────────────────────
+
+info "Installing binary       ${BIN_DEST}"
+run install -Dm755 "${BIN_SRC}" "${BIN_DEST}"
+ok "Binary installed"
+
+# ─── symlink autopull → auto_pull ──────────────────────────
+
+info "Linking command         ${CMD_DEST}"
+run ln -sf "${BIN_DEST}" "${CMD_DEST}"
+ok "autopull → auto_pull"
+
+# ─── config ────────────────────────────────────────────────
+
+info "Config dir              ${CFG_DIR}"
+run install -d "${CFG_DIR}"
+
+if [ ! -f "${CFG_FILE}" ]; then
+    run install -m644 "${CFG_EXAMPLE}" "${CFG_FILE}"
+    ok "Default config created: ${CFG_FILE}"
+else
+    ok "Existing config kept:   ${CFG_FILE}"
+fi
+
+# ─── log ───────────────────────────────────────────────────
+
+info "Log dir                 ${LOG_DIR}"
+run install -d "${LOG_DIR}"
+if [ ! -f "${LOG_FILE}" ]; then
+    run touch "${LOG_FILE}"
+    run chmod 0644 "${LOG_FILE}"
+fi
+ok "Log file ready:         ${LOG_FILE}"
+
+# ─── systemd ───────────────────────────────────────────────
+
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+    if [ -f "${UNIT_SRC}" ]; then
+        info "Installing systemd unit ${SYSTEMD_UNIT}"
+        run install -Dm644 "${UNIT_SRC}" "${SYSTEMD_UNIT}"
+        run systemctl daemon-reload
+        run systemctl enable --now "${APP_NAME}.service"
+        ok "Service enabled:        ${APP_NAME}.service"
+    else
+        warn "Unit file not found (${UNIT_SRC}) — skipping systemd setup"
+    fi
+else
+    warn "systemd not detected — start manually:"
+    warn "  ${BIN_DEST} ${CFG_FILE}"
+fi
+
+# ─── done ──────────────────────────────────────────────────
+
+printf '\n'
+ok "Installation complete"
+printf '\n'
+printf '  binary  : %s\n' "${BIN_DEST}"
+printf '  command : %s\n' "${CMD_DEST}"
+printf '  config  : %s\n' "${CFG_FILE}"
+printf '  log     : %s\n' "${LOG_FILE}"
+printf '\n'
+printf '  Edit the config, then:\n'
+printf '    autopull dry-run     # verify connectivity\n'
+printf '    autopull             # start watching\n'
+printf '\n'
+printf '  Or via systemd:\n'
+printf '    sudo systemctl status %s\n' "${APP_NAME}"
+printf '\n'

@@ -8,20 +8,37 @@ Pure Go · zero dependencies · Linux & macOS · systemd-ready
 
 ## Install
 
+Quick installer (auto-detects Linux/macOS, amd64/arm64):
+
 ```bash
-./scripts/release-linux.sh v1.1.0
-tar -xzf dist/auto_pull_linux_amd64_v1.1.0.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.1.0
+curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.sh | sh
+```
+
+- Downloads the latest release binary and installs to `/usr/local/bin/autopull`.
+- Requires `curl` and `git` on `PATH`.
+
+Uninstall:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.sh | sh -s -- uninstall
+```
+
+Manual install (from local build artifact):
+
+```bash
+./scripts/release-linux.sh v1.1.1
+tar -xzf dist/auto_pull_linux_amd64_v1.1.1.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.1.1
 sudo ./install.sh
 ```
 
-Or build from source:
+Build from source (Go 1.21+):
 
 ```bash
 go build -o autopull .
 ```
 
-Requires Go 1.21+ and `git` on `PATH`.
+Then move `autopull` somewhere on `PATH`, e.g. `/usr/local/bin/`.
 
 ---
 
@@ -159,11 +176,11 @@ Environment=AUTOPULL_TOKEN=ghp_xxxxxxxxxxxx
 
 ```bash
 # build portable tar.gz
-./scripts/release-linux.sh v1.1.0
+./scripts/release-linux.sh v1.1.1
 
 # install
-tar -xzf dist/auto_pull_linux_amd64_v1.1.0.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.1.0
+tar -xzf dist/auto_pull_linux_amd64_v1.1.1.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.1.1
 sudo ./install.sh
 
 # uninstall
