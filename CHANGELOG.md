@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.4] - 2026-03-31
+
+### Fixed
+- Installer go-install fallback now finds either the expected binary name (`autopull`) or the module basename, avoiding false negatives when Go emits `auto_pull_go`.
+
+### Changed
+- Version bumped to v1.1.4.
+
 ## [v1.1.3] - 2026-04-01
 
 ### Added

@@ -9,6 +9,7 @@ set -e
 REPO="reinanbr/auto_pull_go"
 BINARY="autopull"
 INSTALL_DIR="/usr/local/bin"
+MODULE_BIN="$(printf "%s" "$REPO" | awk -F/ '{print $NF}')"
 
 # ─── helpers ───────────────────────────────────────────────
 
@@ -146,10 +147,18 @@ if [ "$ACTION" = "install" ]; then
             if [ -z "$GO_BIN" ]; then
                 GO_BIN="$(go env GOPATH)/bin"
             fi
+
             GO111MODULE=on go install "github.com/reinanbr/auto_pull_go@${VERSION}" \
                 || die "go install failed; please install Go 1.21+ or provide a release binary"
-            TMP="${GO_BIN}/${BINARY}"
-            [ -f "$TMP" ] || die "go install succeeded but ${TMP} not found"
+
+            for candidate in "${GO_BIN}/${BINARY}" "${GO_BIN}/${MODULE_BIN}"; do
+                if [ -f "$candidate" ]; then
+                    TMP="$candidate"
+                    break
+                fi
+            done
+
+            [ -n "$TMP" ] || die "go install succeeded but no binary found at ${GO_BIN}/${BINARY} or ${GO_BIN}/${MODULE_BIN}"
             ok "Built from source at ${TMP}"
         else
             die "Download failed and Go is not available to build from source:\n  ${URL}"
