@@ -36,3 +36,14 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - README documenta limitação de OS (Linux/macOS), multi-repo, backoff, log rotation e token por ambiente.
+
+## [v1.0.3] - 2026-03-31
+
+### Added
+- Flag `--version` no binário.
+- Tratamento de sinais (SIGINT/SIGTERM) para shutdown limpo.
+- Exemplo de config no root: `config_auto_pull.example.json` e `config_auto_pull.json` ignorado no git.
+- Workflow CI (GitHub Actions) com gofmt, vet, test, build.
+
+### Changed
+- README documenta suporte de OS, CI, multi-repo e config exemplo no root.

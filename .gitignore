@@ -18,6 +18,7 @@ bin/
 dist/
 build/
 auto_pull
+config_auto_pull.json
 
 # Runtime artifacts
 auto_pull.log

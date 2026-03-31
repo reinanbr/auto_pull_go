@@ -8,6 +8,8 @@ After installation, the global command is `autopull`.
 
 OS support today: Linux and macOS (notifications). Windows is not supported in this build.
 
+CI: GitHub Actions runs gofmt, vet, test, and build on pushes/PRs.
+
 ---
 
 ## Files
@@ -18,8 +20,9 @@ auto_pull/
 ├── go.mod                   ← Go module file
 ├── run.sh                   ← build / process manager script
 └── config_auto_pull.json    ← your configuration
+├── config_auto_pull.example.json
+└── (local) config_auto_pull.json is ignored — keep your real config out of git
 ```
-
 ---
 
 ## Requirements
@@ -131,6 +134,7 @@ go build -o auto_pull main.go
 ```bash
 autopull
 autopull /path/to/config_auto_pull.json
+autopull --version
 ```
 
 ---
@@ -240,6 +244,7 @@ every N seconds:
 - Backoff: git failures use exponential backoff (cap 5m) per repo.
 - post_pull_command: executed via `sh -c` — treat the config as trusted input. If untrusted, avoid enabling `post_pull_command` or wrap with your own validation.
 - Log rotation: built-in rotation around 5MB (`log_file` → `log_file.1`). For production, you can also wire logrotate.
+- Signals: SIGINT/SIGTERM are trapped for graceful shutdown (logger is closed).
 
 ---
 

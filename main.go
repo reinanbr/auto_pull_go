@@ -7,8 +7,10 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -35,6 +37,8 @@ type RepoConfig struct {
 	PostPullWorkdir string `json:"post_pull_workdir"`
 	NotifyOnPull    bool   `json:"notify_on_pull"`
 }
+
+var version = "dev"
 
 const gitTimeout = 15 * time.Second
 
@@ -257,7 +261,7 @@ func notify(title, body string) {
 // Main loop
 // ─────────────────────────────────────────────
 
-func watch(cfgPath string) {
+func watch(ctx context.Context, cfgPath string) {
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: %v\n", err)
@@ -293,7 +297,14 @@ func watch(cfgPath string) {
 	running := false
 	state := map[string]*repoState{}
 
-	for range ticker.C {
+	for {
+		select {
+		case <-ctx.Done():
+			l.info("shutting down (signal)")
+			return
+		case <-ticker.C:
+		}
+
 		if running {
 			l.warn("previous cycle still running; skipping tick")
 			continue
@@ -448,8 +459,15 @@ func backoffDuration(failures int) time.Duration {
 
 func main() {
 	cfgPath := "config_auto_pull.json"
-	if len(os.Args) > 1 {
-		cfgPath = os.Args[1]
+	args := os.Args[1:]
+	for _, a := range args {
+		if a == "--version" || a == "-v" {
+			fmt.Println("auto_pull", version)
+			return
+		}
+	}
+	if len(args) > 0 {
+		cfgPath = args[len(args)-1]
 	}
 
 	abs, err := filepath.Abs(cfgPath)
@@ -459,9 +477,12 @@ func main() {
 
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "Config file not found: %s\n", cfgPath)
-		fmt.Fprintln(os.Stderr, "Usage: auto_pull [path/to/config_auto_pull.json]")
+		fmt.Fprintln(os.Stderr, "Usage: auto_pull [--version] [path/to/config_auto_pull.json]")
 		os.Exit(1)
 	}
 
-	watch(cfgPath)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	watch(ctx, cfgPath)
 }
