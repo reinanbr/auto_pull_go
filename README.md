@@ -123,6 +123,20 @@ autopull /path/to/config_auto_pull.json
 autopull --version
 ```
 
+### CLI helpers (per repo)
+
+```bash
+autopull init              # create config_auto_pull.json in current git repo
+autopull status            # show pid, pulls, bytes transferred, errors/backoff, log path
+autopull stop              # stop the daemon linked to this config (pid file)
+autopull logs              # print recent log lines for this config
+```
+
+- `init` infers repo path from the current git working tree and guesses the branch.
+- `status` reads `.auto_pull.pid` and `.auto_pull.state.json` next to the config (created by the daemon).
+- `stop` sends SIGTERM to the pid stored in `.auto_pull.pid` and cleans stale pid files.
+- `logs` tails the configured log file (shows recent lines).
+
 ---
 
 ## Distro-agnostic Linux distribution
@@ -143,20 +157,20 @@ scripts/
 ### Build portable release (`tar.gz`)
 
 ```bash
-./scripts/release-linux.sh v1.0.7
+./scripts/release-linux.sh v1.0.8
 ```
 
 Output example:
 
 ```bash
-dist/auto_pull_linux_amd64_v1.0.7.tar.gz
+dist/auto_pull_linux_amd64_v1.0.8.tar.gz
 ```
 
 ### Install on any Linux distro
 
 ```bash
-tar -xzf dist/auto_pull_linux_amd64_v1.0.7.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.0.7
+tar -xzf dist/auto_pull_linux_amd64_v1.0.8.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.0.8
 sudo ./install.sh
 ```
 
@@ -237,9 +251,9 @@ every N seconds:
 ## Quick start (Linux)
 
 ```bash
-./scripts/release-linux.sh v1.0.7
-tar -xzf dist/auto_pull_linux_amd64_v1.0.7.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.0.7
+./scripts/release-linux.sh v1.0.8
+tar -xzf dist/auto_pull_linux_amd64_v1.0.8.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.0.8
 sudo ./install.sh
 ```
 

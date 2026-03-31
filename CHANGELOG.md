@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.8] - 2026-03-31
+
+### Added
+- New CLI subcommands: `autopull init` (generate config in current git repo), `status` (pid + pulls + bytes + backoff + errors), `stop` (terminate daemon via pid), `logs` (tail recent log lines).
+- Runtime state persisted to `.auto_pull.state.json` (pull count, bytes transferred, last pull, consecutive errors, backoff).
+
+### Changed
+- The watcher writes its PID to `.auto_pull.pid` (alongside the config) for status/stop commands.
+
+## [v1.0.7] - 2026-03-31
+
+### Added
+- Token can also be supplied via `GITHUB_TOKEN` (env or .env), alongside `AUTOPULL_TOKEN`.
+
+### Changed
+- Docs updated to reflect env-first token flow and `.env` usage; JSON token remains legacy.
+
 ## [v1.0.6] - 2026-03-31
 
 ### Added
@@ -14,14 +31,6 @@ All notable changes to this project will be documented in this file.
 - Safer hash rendering avoids panics on short hashes.
 - Backoff hardens after repeated failures (caps to 5 minutes after 5 errors).
 - Multi-repo configs are deprecated; only the first entry is processed when present.
-
-## [v1.0.7] - 2026-03-31
-
-### Added
-- Token can also be supplied via `GITHUB_TOKEN` (env or .env), alongside `AUTOPULL_TOKEN`.
-
-### Changed
-- Docs updated to reflect env-first token flow and `.env` usage; JSON token remains legacy.
 
 ## [v1.0.5] - 2026-03-31
 

@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -76,7 +78,17 @@ func tokenFromEnv() string {
 	return ""
 }
 
-var version = "v1.0.7"
+func resolveConfigPath(p string) string {
+	if p == "" {
+		p = "config_auto_pull.json"
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return p
+}
+
+var version = "v1.0.8"
 var multiRepoWarned bool
 
 const gitTimeout = 15 * time.Second
@@ -116,6 +128,25 @@ func loadConfig(path string) (*Config, error) {
 	}
 	cfg.GithubToken = token
 	return &cfg, nil
+}
+
+func writeConfig(path string, cfg Config) error {
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func detectBranch(repoPath string) string {
+	branch, err := runGit(repoPath, "", "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil || branch == "" || branch == "HEAD" {
+		return "main"
+	}
+	return branch
 }
 
 // ─────────────────────────────────────────────
@@ -337,6 +368,16 @@ func watch(ctx context.Context, cfgPath string) {
 		os.Exit(1)
 	}
 
+	pidPath := pidFilePath(cfgPath)
+	if err := writePID(pidPath, os.Getpid()); err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: could not write pid file: %v\n", err)
+		os.Exit(1)
+	}
+	defer os.Remove(pidPath)
+
+	statePath := stateFilePath(cfgPath)
+	runtimeState := loadRuntimeState(statePath)
+
 	logPath := cfg.LogFile
 	if !filepath.IsAbs(logPath) {
 		logPath = filepath.Join(filepath.Dir(cfgPath), logPath)
@@ -412,7 +453,13 @@ func watch(ctx context.Context, cfgPath string) {
 					continue
 				}
 
-				processRepo(repo, cfg.GithubToken, l, st)
+				processRepo(repo, cfg.GithubToken, l, st, runtimeState)
+				runtimeState.ConsecutiveErrors = st.consecutiveErrors
+				runtimeState.BackoffUntil = st.backoffUntil
+			}
+
+			if err := saveRuntimeState(statePath, runtimeState); err != nil {
+				l.warn(fmt.Sprintf("could not persist state: %v", err))
 			}
 		}()
 	}
@@ -421,6 +468,23 @@ func watch(ctx context.Context, cfgPath string) {
 type repoState struct {
 	consecutiveErrors int
 	backoffUntil      time.Time
+}
+
+type RuntimeState struct {
+	Pulls             int       `json:"pulls"`
+	BytesTransferred  int64     `json:"bytes_transferred"`
+	LastPull          time.Time `json:"last_pull"`
+	ConsecutiveErrors int       `json:"consecutive_errors"`
+	BackoffUntil      time.Time `json:"backoff_until"`
+	LastError         string    `json:"last_error"`
+}
+
+func pidFilePath(cfgPath string) string {
+	return filepath.Join(filepath.Dir(cfgPath), ".auto_pull.pid")
+}
+
+func stateFilePath(cfgPath string) string {
+	return filepath.Join(filepath.Dir(cfgPath), ".auto_pull.state.json")
 }
 
 func shortHash(s string) string {
@@ -497,7 +561,7 @@ func singleRepoFromLegacy(cfg *Config) RepoWork {
 	}
 }
 
-func processRepo(repo RepoWork, token string, l *Logger, st *repoState) {
+func processRepo(repo RepoWork, token string, l *Logger, st *repoState, rs *RuntimeState) {
 	local, err := localCommit(repo.RepoPath)
 	if err != nil {
 		st.consecutiveErrors++
@@ -506,6 +570,9 @@ func processRepo(repo RepoWork, token string, l *Logger, st *repoState) {
 			delay = 5 * time.Minute
 		}
 		st.backoffUntil = time.Now().Add(delay)
+		rs.ConsecutiveErrors = st.consecutiveErrors
+		rs.BackoffUntil = st.backoffUntil
+		rs.LastError = err.Error()
 		l.errLog(fmt.Sprintf("%s: git rev-parse (local) failed (%dx): %v", repo.RepoPath, st.consecutiveErrors, err))
 		return
 	}
@@ -523,13 +590,22 @@ func processRepo(repo RepoWork, token string, l *Logger, st *repoState) {
 			delay = 5 * time.Minute
 		}
 		st.backoffUntil = time.Now().Add(delay)
+		rs.ConsecutiveErrors = st.consecutiveErrors
+		rs.BackoffUntil = st.backoffUntil
+		rs.LastError = err.Error()
 		l.errLog(fmt.Sprintf("%s: git fetch failed (%dx): %v", repo.RepoPath, st.consecutiveErrors, err))
 		return
 	}
 	st.consecutiveErrors = 0
 	st.backoffUntil = time.Time{}
+	rs.ConsecutiveErrors = 0
+	rs.BackoffUntil = time.Time{}
+	rs.LastError = ""
 
 	if local == remote {
+		rs.ConsecutiveErrors = 0
+		rs.BackoffUntil = time.Time{}
+		rs.LastError = ""
 		return
 	}
 
@@ -544,6 +620,11 @@ func processRepo(repo RepoWork, token string, l *Logger, st *repoState) {
 	if out != "" {
 		l.info("  " + strings.ReplaceAll(out, "\n", "\n  "))
 	}
+	if bytes := parseBytesTransferred(out); bytes > 0 {
+		rs.BytesTransferred += bytes
+	}
+	rs.Pulls++
+	rs.LastPull = time.Now()
 
 	if repo.NotifyOnPull {
 		notify("auto_pull", fmt.Sprintf("Pull done: %s@%s", filepath.Base(repo.RepoPath), repo.Branch))
@@ -575,27 +656,276 @@ func backoffDuration(failures int) time.Duration {
 	return d
 }
 
-func main() {
-	cfgPath := "config_auto_pull.json"
-	args := os.Args[1:]
-	for _, a := range args {
-		if a == "--version" || a == "-v" {
-			fmt.Println("auto_pull", version)
-			return
+func parseBytesTransferred(out string) int64 {
+	re := regexp.MustCompile(`(?i)([0-9]+(?:\.[0-9]+)?)\s*(kib|kb|mib|mb|gib|gb)`) // best-effort
+	m := re.FindStringSubmatch(out)
+	if len(m) < 3 {
+		return 0
+	}
+	val, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0
+	}
+	switch strings.ToLower(m[2]) {
+	case "kb":
+		return int64(val * 1_000)
+	case "kib":
+		return int64(val * 1024)
+	case "mb":
+		return int64(val * 1_000_000)
+	case "mib":
+		return int64(val * 1024 * 1024)
+	case "gb":
+		return int64(val * 1_000_000_000)
+	case "gib":
+		return int64(val * 1024 * 1024 * 1024)
+	}
+	return 0
+}
+
+func cmdInit(cfgPath string) error {
+	cfgPath = resolveConfigPath(cfgPath)
+	repoRoot, err := runGit(".", "", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("init requires a git repository: %w", err)
+	}
+	if _, err := os.Stat(cfgPath); err == nil {
+		return fmt.Errorf("config already exists: %s", cfgPath)
+	}
+	branch := detectBranch(repoRoot)
+	cfg := Config{
+		RepoPath:             repoRoot,
+		Branch:               branch,
+		CheckIntervalSeconds: 5,
+		GithubToken:          "",
+		PostPullCommand:      "",
+		PostPullWorkdir:      "",
+		LogFile:              "auto_pull.log",
+		NotifyOnPull:         true,
+	}
+	if err := writeConfig(cfgPath, cfg); err != nil {
+		return err
+	}
+	fmt.Printf("Created %s for repo %s (branch %s)\n", cfgPath, repoRoot, branch)
+	return nil
+}
+
+func cmdStatus(cfgPath string) error {
+	cfgPath = resolveConfigPath(cfgPath)
+	cfg, err := loadConfig(cfgPath)
+	if err != nil {
+		return err
+	}
+	logPath := cfg.LogFile
+	if !filepath.IsAbs(logPath) {
+		logPath = filepath.Join(filepath.Dir(cfgPath), logPath)
+	}
+	pidPath := pidFilePath(cfgPath)
+	pid, pidErr := readPID(pidPath)
+	alive := pidErr == nil && processAlive(pid)
+	state := loadRuntimeState(stateFilePath(cfgPath))
+
+	fmt.Printf("Config: %s\n", cfgPath)
+	fmt.Printf("PID file: %s\n", pidPath)
+	if pidErr != nil {
+		fmt.Printf("Status: no pid file (%v)\n", pidErr)
+	} else {
+		status := "stopped"
+		if alive {
+			status = "running"
+		}
+		fmt.Printf("Status: %s (pid %d)\n", status, pid)
+	}
+	fmt.Printf("Pulls: %d\n", state.Pulls)
+	fmt.Printf("Bytes transferred: %d\n", state.BytesTransferred)
+	if !state.LastPull.IsZero() {
+		fmt.Printf("Last pull: %s\n", state.LastPull.Format(time.RFC3339))
+	}
+	if state.ConsecutiveErrors > 0 {
+		fmt.Printf("Consecutive errors: %d\n", state.ConsecutiveErrors)
+	}
+	if !state.BackoffUntil.IsZero() {
+		fmt.Printf("Backoff until: %s\n", state.BackoffUntil.Format(time.RFC3339))
+	}
+	if state.LastError != "" {
+		fmt.Printf("Last error: %s\n", state.LastError)
+	}
+	fmt.Printf("Log: %s\n", logPath)
+	fmt.Printf("State: %s\n", stateFilePath(cfgPath))
+	return nil
+}
+
+func cmdStop(cfgPath string) error {
+	cfgPath = resolveConfigPath(cfgPath)
+	pidPath := pidFilePath(cfgPath)
+	msg, err := stopProcess(pidPath)
+	if err != nil {
+		return err
+	}
+	fmt.Println(msg)
+	return nil
+}
+
+func cmdLogs(cfgPath string, lines int) error {
+	cfgPath = resolveConfigPath(cfgPath)
+	cfg, err := loadConfig(cfgPath)
+	if err != nil {
+		return err
+	}
+	logPath := cfg.LogFile
+	if !filepath.IsAbs(logPath) {
+		logPath = filepath.Join(filepath.Dir(cfgPath), logPath)
+	}
+	out, err := tailFile(logPath, lines)
+	if err != nil {
+		return err
+	}
+	fmt.Println(out)
+	return nil
+}
+
+func writePID(path string, pid int) error {
+	return os.WriteFile(path, []byte(strconv.Itoa(pid)), 0644)
+}
+
+func readPID(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, err
+	}
+	return pid, nil
+}
+
+func processAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+func stopProcess(pidPath string) (string, error) {
+	pid, err := readPID(pidPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Sprintf("pid file not found: %s", pidPath), nil
+		}
+		return "", err
+	}
+	if !processAlive(pid) {
+		_ = os.Remove(pidPath)
+		return fmt.Sprintf("Process %d not running; cleaned pid file", pid), nil
+	}
+	_ = syscall.Kill(pid, syscall.SIGTERM)
+	return fmt.Sprintf("Sent SIGTERM to %d", pid), nil
+}
+
+func loadRuntimeState(path string) *RuntimeState {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return &RuntimeState{}
+	}
+	var rs RuntimeState
+	if err := json.Unmarshal(data, &rs); err != nil {
+		return &RuntimeState{}
+	}
+	return &rs
+}
+
+func saveRuntimeState(path string, rs *RuntimeState) error {
+	data, err := json.MarshalIndent(rs, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func tailFile(path string, lines int) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	var buf []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		buf = append(buf, scanner.Text())
+		if len(buf) > lines {
+			buf = buf[1:]
 		}
 	}
-	if len(args) > 0 {
-		cfgPath = args[len(args)-1]
+	return strings.Join(buf, "\n"), nil
+}
+
+func main() {
+	args := os.Args[1:]
+
+	if len(args) == 0 {
+		runWatcher("config_auto_pull.json")
+		return
 	}
 
-	abs, err := filepath.Abs(cfgPath)
-	if err == nil {
-		cfgPath = abs
+	switch args[0] {
+	case "--version", "-v":
+		fmt.Println("auto_pull", version)
+		return
+	case "init":
+		cfg := ""
+		if len(args) > 1 {
+			cfg = args[1]
+		}
+		if err := cmdInit(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "init error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "status":
+		cfg := ""
+		if len(args) > 1 {
+			cfg = args[1]
+		}
+		if err := cmdStatus(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "status error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "stop":
+		cfg := ""
+		if len(args) > 1 {
+			cfg = args[1]
+		}
+		if err := cmdStop(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "stop error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "logs":
+		cfg := ""
+		if len(args) > 1 {
+			cfg = args[1]
+		}
+		if err := cmdLogs(cfg, 100); err != nil {
+			fmt.Fprintf(os.Stderr, "logs error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
+	// Backward compatible: treat last argument as config path
+	cfgPath := args[len(args)-1]
+	runWatcher(cfgPath)
+}
+
+func runWatcher(cfgPath string) {
+	cfgPath = resolveConfigPath(cfgPath)
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "Config file not found: %s\n", cfgPath)
-		fmt.Fprintln(os.Stderr, "Usage: auto_pull [--version] [path/to/config_auto_pull.json]")
+		fmt.Fprintln(os.Stderr, "Usage: auto_pull [--version] [init|status|stop|logs] [path/to/config_auto_pull.json]")
 		os.Exit(1)
 	}
 
