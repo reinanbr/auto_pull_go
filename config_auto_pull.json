@@ -1,0 +1,10 @@
+{
+  "repo_path": "/path/to/your/repository",
+  "branch": "main",
+  "check_interval_seconds": 5,
+  "github_token": "",
+  "post_pull_command": "echo 'Deploy done!' && ./deploy.sh",
+  "post_pull_workdir": "",
+  "log_file": "auto_pull.log",
+  "notify_on_pull": true
+}
