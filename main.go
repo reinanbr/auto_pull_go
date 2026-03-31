@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -16,15 +17,17 @@ import (
 // ─────────────────────────────────────────────
 
 type Config struct {
-	RepoPath              string `json:"repo_path"`
-	Branch                string `json:"branch"`
-	CheckIntervalSeconds  int    `json:"check_interval_seconds"`
-	GithubToken           string `json:"github_token"`
-	PostPullCommand       string `json:"post_pull_command"`
-	PostPullWorkdir       string `json:"post_pull_workdir"`
-	LogFile               string `json:"log_file"`
-	NotifyOnPull          bool   `json:"notify_on_pull"`
+	RepoPath             string `json:"repo_path"`
+	Branch               string `json:"branch"`
+	CheckIntervalSeconds int    `json:"check_interval_seconds"`
+	GithubToken          string `json:"github_token"`
+	PostPullCommand      string `json:"post_pull_command"`
+	PostPullWorkdir      string `json:"post_pull_workdir"`
+	LogFile              string `json:"log_file"`
+	NotifyOnPull         bool   `json:"notify_on_pull"`
 }
+
+const gitTimeout = 15 * time.Second
 
 func loadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -76,33 +79,78 @@ func (l *Logger) log(level, msg string) {
 	l.logger.Println(line)
 }
 
-func (l *Logger) info(msg string)  { l.log("INFO ", msg) }
-func (l *Logger) ok(msg string)    { l.log("OK   ", msg) }
-func (l *Logger) warn(msg string)  { l.log("WARN ", msg) }
+func (l *Logger) info(msg string)   { l.log("INFO ", msg) }
+func (l *Logger) ok(msg string)     { l.log("OK   ", msg) }
+func (l *Logger) warn(msg string)   { l.log("WARN ", msg) }
 func (l *Logger) errLog(msg string) { l.log("ERROR", msg) }
-func (l *Logger) close()           { l.file.Close() }
+func (l *Logger) close()            { l.file.Close() }
 
 // ─────────────────────────────────────────────
 // Git helpers
 // ─────────────────────────────────────────────
 
 func runGit(dir string, token string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 
-	// inject token into remote URL if provided
+	env := os.Environ()
+	var cleanup func()
+
 	if token != "" {
-		cmd.Env = append(os.Environ(),
-			fmt.Sprintf("GIT_ASKPASS=echo"),
-			fmt.Sprintf("GIT_USERNAME=oauth2"),
-			fmt.Sprintf("GIT_PASSWORD=%s", token),
+		askpassPath, cleanupFn, err := createAskPassScript()
+		if err != nil {
+			return "", err
+		}
+		cleanup = cleanupFn
+		env = append(env,
+			"GIT_ASKPASS="+askpassPath,
+			"GIT_TERMINAL_PROMPT=0",
+			"GIT_USERNAME=oauth2",
+			"GIT_TOKEN="+token,
 		)
-	} else {
-		cmd.Env = os.Environ()
 	}
 
+	cmd.Env = env
+
 	out, err := cmd.CombinedOutput()
+	if cleanup != nil {
+		cleanup()
+	}
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return strings.TrimSpace(string(out)), fmt.Errorf("git command timed out: %w", err)
+	}
+
 	return strings.TrimSpace(string(out)), err
+}
+
+func createAskPassScript() (string, func(), error) {
+	f, err := os.CreateTemp("", "autopull-askpass-*")
+	if err != nil {
+		return "", func() {}, err
+	}
+
+	script := "#!/usr/bin/env bash\nprintf \"%s\" \"$GIT_TOKEN\"\n"
+	if _, err := f.WriteString(script); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", func() {}, err
+	}
+	if err := f.Chmod(0700); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", func() {}, err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return "", func() {}, err
+	}
+
+	cleanup := func() { _ = os.Remove(f.Name()) }
+	return f.Name(), cleanup, nil
 }
 
 // localCommit returns the current HEAD hash
@@ -204,58 +252,69 @@ func watch(cfgPath string) {
 	interval := time.Duration(cfg.CheckIntervalSeconds) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	running := false
 
 	consecutiveErrors := 0
 
 	for range ticker.C {
-		// re-read config on every tick so user can change it without restart
-		newCfg, err := loadConfig(cfgPath)
-		if err != nil {
-			l.warn(fmt.Sprintf("Invalid config, keeping previous: %v", err))
-		} else {
-			cfg = newCfg
-		}
-
-		local, err := localCommit(cfg.RepoPath)
-		if err != nil {
-			consecutiveErrors++
-			l.errLog(fmt.Sprintf("git rev-parse (local) failed (%dx): %v", consecutiveErrors, err))
+		if running {
+			l.warn("previous cycle still running; skipping tick")
 			continue
 		}
+		running = true
 
-		remote, err := remoteCommit(cfg.RepoPath, cfg.Branch, cfg.GithubToken)
-		if err != nil {
-			consecutiveErrors++
-			l.errLog(fmt.Sprintf("git fetch failed (%dx): %v", consecutiveErrors, err))
-			continue
-		}
-		consecutiveErrors = 0
+		func() {
+			defer func() { running = false }()
 
-		if local == remote {
-			continue // nada novo
-		}
+			// re-read config on every tick so user can change it without restart
+			newCfg, err := loadConfig(cfgPath)
+			if err != nil {
+				l.warn(fmt.Sprintf("Invalid config, keeping previous: %v", err))
+			} else {
+				cfg = newCfg
+			}
 
-		l.ok(fmt.Sprintf("New commit detected: %s → %s", local[:7], remote[:7]))
+			local, err := localCommit(cfg.RepoPath)
+			if err != nil {
+				consecutiveErrors++
+				l.errLog(fmt.Sprintf("git rev-parse (local) failed (%dx): %v", consecutiveErrors, err))
+				return
+			}
 
-		out, err := pull(cfg.RepoPath, cfg.Branch, cfg.GithubToken)
-		if err != nil {
-			l.errLog(fmt.Sprintf("git pull failed: %v\n%s", err, out))
-			continue
-		}
-		l.ok("git pull completed")
-		if out != "" {
-			l.info("  " + strings.ReplaceAll(out, "\n", "\n  "))
-		}
+			remote, err := remoteCommit(cfg.RepoPath, cfg.Branch, cfg.GithubToken)
+			if err != nil {
+				consecutiveErrors++
+				l.errLog(fmt.Sprintf("git fetch failed (%dx): %v", consecutiveErrors, err))
+				return
+			}
+			consecutiveErrors = 0
 
-		if cfg.NotifyOnPull {
-			notify("auto_pull", fmt.Sprintf("Pull done: %s@%s", filepath.Base(cfg.RepoPath), cfg.Branch))
-		}
+			if local == remote {
+				return // nada novo
+			}
 
-		if err := runPostCommand(cfg, l); err != nil {
-			l.errLog(fmt.Sprintf("post-pull command failed: %v", err))
-		} else if cfg.PostPullCommand != "" {
-			l.ok("post-pull command completed successfully")
-		}
+			l.ok(fmt.Sprintf("New commit detected: %s → %s", local[:7], remote[:7]))
+
+			out, err := pull(cfg.RepoPath, cfg.Branch, cfg.GithubToken)
+			if err != nil {
+				l.errLog(fmt.Sprintf("git pull failed: %v\n%s", err, out))
+				return
+			}
+			l.ok("git pull completed")
+			if out != "" {
+				l.info("  " + strings.ReplaceAll(out, "\n", "\n  "))
+			}
+
+			if cfg.NotifyOnPull {
+				notify("auto_pull", fmt.Sprintf("Pull done: %s@%s", filepath.Base(cfg.RepoPath), cfg.Branch))
+			}
+
+			if err := runPostCommand(cfg, l); err != nil {
+				l.errLog(fmt.Sprintf("post-pull command failed: %v", err))
+			} else if cfg.PostPullCommand != "" {
+				l.ok("post-pull command completed successfully")
+			}
+		}()
 	}
 }
 

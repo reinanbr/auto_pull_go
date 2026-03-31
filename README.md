@@ -202,6 +202,13 @@ every N seconds:
 - Optional desktop notifications (Linux: `notify-send`, macOS: `osascript`)
 - Config is reloaded on every tick — no restart needed for changes
 
+## Security and runtime notes
+
+- Git credentials: token is injected via a temporary `GIT_ASKPASS` script and `GIT_TOKEN` env var (no `GIT_PASSWORD` in env; prompt disabled with `GIT_TERMINAL_PROMPT=0`).
+- Timeouts: all git commands run with a 15s timeout; failures are logged.
+- Concurrency: only one pull cycle runs at a time; overlapping ticks are skipped with a warning.
+- post_pull_command: executed via `sh -c` — treat the config as trusted input. If untrusted, avoid enabling `post_pull_command` or wrap with your own validation.
+
 ---
 
 ## Quick start (Linux)
