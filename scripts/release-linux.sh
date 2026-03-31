@@ -12,7 +12,7 @@ rm -rf "${OUT_DIR}"
 mkdir -p "${OUT_DIR}"
 
 pushd "${ROOT_DIR}" >/dev/null
-CGO_ENABLED=0 GOOS="${OS}" GOARCH="${ARCH}" go build -trimpath -ldflags="-s -w" -o "${OUT_DIR}/${APP_NAME}" main.go
+CGO_ENABLED=0 GOOS="${OS}" GOARCH="${ARCH}" go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o "${OUT_DIR}/${APP_NAME}" main.go
 popd >/dev/null
 
 cp "${ROOT_DIR}/packaging/linux/install.sh" "${OUT_DIR}/install.sh"

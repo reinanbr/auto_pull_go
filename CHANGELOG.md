@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.5] - 2026-03-31
+
+### Added
+- Release builds now embed the version string via `-X main.version`.
+- Default binary version set to `v1.0.5` for tagged builds.
+
 ## [v1.0.0] - 2026-03-31
 
 ### Added
@@ -30,29 +36,29 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Multiple repositories support via `repos` array in config.
-- Exponential backoff (capped) per repositório em falhas de git.
-- Env token fallback: usa `AUTOPULL_TOKEN` quando `github_token` está vazio.
-- Log rotation simples em ~5MB (`log_file.1`).
+- Exponential backoff (capped) per repository on git failures.
+- Env token fallback: uses `AUTOPULL_TOKEN` when `github_token` is empty.
+- Simple log rotation around ~5MB (`log_file.1`).
 
 ### Changed
-- README documenta limitação de OS (Linux/macOS), multi-repo, backoff, log rotation e token por ambiente.
+- README documents OS limitation (Linux/macOS), multi-repo, backoff, log rotation, and env token.
 
 ## [v1.0.3] - 2026-03-31
 
 ### Added
-- Flag `--version` no binário.
-- Tratamento de sinais (SIGINT/SIGTERM) para shutdown limpo.
-- Exemplo de config no root: `config_auto_pull.example.json` e `config_auto_pull.json` ignorado no git.
-- Workflow CI (GitHub Actions) com gofmt, vet, test, build.
+- `--version` flag in the binary.
+- Signal handling (SIGINT/SIGTERM) for graceful shutdown.
+- Config example in root: `config_auto_pull.example.json`; `config_auto_pull.json` ignored by git.
+- CI workflow (GitHub Actions) running gofmt, vet, test, build.
 
 ### Changed
-- README documenta suporte de OS, CI, multi-repo e config exemplo no root.
+- README documents OS support, CI, multi-repo, and root config example.
 
 ## [v1.0.4] - 2026-03-31
 
 ### Added
-- run.sh: flag `--config` e suporte a caminho posicional de config.
+- run.sh: `--config` flag and positional config path support.
 
 ### Changed
-- run.sh: daemon não redireciona log (evita duplicação); stop espera término com timeout.
-- go.mod: módulo agora é `github.com/reinanbr/auto_pull_go`.
+- run.sh: daemon no longer redirects logs (avoids duplication); `--stop` waits for termination with timeout.
+- go.mod: module is now `github.com/reinanbr/auto_pull_go`.

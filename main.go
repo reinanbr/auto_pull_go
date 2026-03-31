@@ -38,7 +38,7 @@ type RepoConfig struct {
 	NotifyOnPull    bool   `json:"notify_on_pull"`
 }
 
-var version = "dev"
+var version = "v1.0.5"
 
 const gitTimeout = 15 * time.Second
 

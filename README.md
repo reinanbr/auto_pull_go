@@ -80,7 +80,7 @@ Multiple repos (new):
 }
 ```
 
-Token via ambiente: se `github_token` estiver vazio, é lido de `AUTOPULL_TOKEN`.
+Token from environment: if `github_token` is empty, it is read from `AUTOPULL_TOKEN`.
 
 | Field | Description | Default |
 |---|---|---|
@@ -157,20 +157,20 @@ scripts/
 ### Build portable release (`tar.gz`)
 
 ```bash
-./scripts/release-linux.sh v1.0.0
+./scripts/release-linux.sh v1.0.5
 ```
 
 Output example:
 
 ```bash
-dist/auto_pull_linux_amd64_v1.0.0.tar.gz
+dist/auto_pull_linux_amd64_v1.0.5.tar.gz
 ```
 
 ### Install on any Linux distro
 
 ```bash
 tar -xzf dist/auto_pull_linux_amd64_v1.0.0.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.0.0
+cd /tmp/auto_pull_linux_amd64_v1.0.5
 sudo ./install.sh
 ```
 
