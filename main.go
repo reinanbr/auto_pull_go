@@ -17,14 +17,23 @@ import (
 // ─────────────────────────────────────────────
 
 type Config struct {
-	RepoPath             string `json:"repo_path"`
-	Branch               string `json:"branch"`
-	CheckIntervalSeconds int    `json:"check_interval_seconds"`
-	GithubToken          string `json:"github_token"`
-	PostPullCommand      string `json:"post_pull_command"`
-	PostPullWorkdir      string `json:"post_pull_workdir"`
-	LogFile              string `json:"log_file"`
-	NotifyOnPull         bool   `json:"notify_on_pull"`
+	RepoPath             string       `json:"repo_path"`
+	Branch               string       `json:"branch"`
+	CheckIntervalSeconds int          `json:"check_interval_seconds"`
+	GithubToken          string       `json:"github_token"`
+	PostPullCommand      string       `json:"post_pull_command"`
+	PostPullWorkdir      string       `json:"post_pull_workdir"`
+	LogFile              string       `json:"log_file"`
+	NotifyOnPull         bool         `json:"notify_on_pull"`
+	Repos                []RepoConfig `json:"repos"`
+}
+
+type RepoConfig struct {
+	RepoPath        string `json:"repo_path"`
+	Branch          string `json:"branch"`
+	PostPullCommand string `json:"post_pull_command"`
+	PostPullWorkdir string `json:"post_pull_workdir"`
+	NotifyOnPull    bool   `json:"notify_on_pull"`
 }
 
 const gitTimeout = 15 * time.Second
@@ -49,6 +58,12 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.LogFile == "" {
 		cfg.LogFile = "auto_pull.log"
 	}
+
+	if cfg.GithubToken == "" {
+		if envTok := os.Getenv("AUTOPULL_TOKEN"); envTok != "" {
+			cfg.GithubToken = envTok
+		}
+	}
 	return &cfg, nil
 }
 
@@ -62,6 +77,9 @@ type Logger struct {
 }
 
 func newLogger(logPath string) (*Logger, error) {
+	if err := rotateIfLarge(logPath, 5*1024*1024); err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, err
@@ -84,6 +102,26 @@ func (l *Logger) ok(msg string)     { l.log("OK   ", msg) }
 func (l *Logger) warn(msg string)   { l.log("WARN ", msg) }
 func (l *Logger) errLog(msg string) { l.log("ERROR", msg) }
 func (l *Logger) close()            { l.file.Close() }
+
+func rotateIfLarge(path string, maxBytes int64) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Size() < maxBytes {
+		return nil
+	}
+
+	backup := path + ".1"
+	_ = os.Remove(backup)
+	if err := os.Rename(path, backup); err != nil {
+		return err
+	}
+	return nil
+}
 
 // ─────────────────────────────────────────────
 // Git helpers
@@ -253,8 +291,7 @@ func watch(cfgPath string) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	running := false
-
-	consecutiveErrors := 0
+	state := map[string]*repoState{}
 
 	for range ticker.C {
 		if running {
@@ -274,48 +311,139 @@ func watch(cfgPath string) {
 				cfg = newCfg
 			}
 
-			local, err := localCommit(cfg.RepoPath)
-			if err != nil {
-				consecutiveErrors++
-				l.errLog(fmt.Sprintf("git rev-parse (local) failed (%dx): %v", consecutiveErrors, err))
-				return
-			}
+			repos := buildRepos(cfg)
+			now := time.Now()
 
-			remote, err := remoteCommit(cfg.RepoPath, cfg.Branch, cfg.GithubToken)
-			if err != nil {
-				consecutiveErrors++
-				l.errLog(fmt.Sprintf("git fetch failed (%dx): %v", consecutiveErrors, err))
-				return
-			}
-			consecutiveErrors = 0
+			for _, repo := range repos {
+				st := state[repo.RepoPath]
+				if st == nil {
+					st = &repoState{}
+					state[repo.RepoPath] = st
+				}
 
-			if local == remote {
-				return // nada novo
-			}
+				if now.Before(st.backoffUntil) {
+					l.warn(fmt.Sprintf("backing off %s until %s", repo.RepoPath, st.backoffUntil.Format(time.RFC3339)))
+					continue
+				}
 
-			l.ok(fmt.Sprintf("New commit detected: %s → %s", local[:7], remote[:7]))
-
-			out, err := pull(cfg.RepoPath, cfg.Branch, cfg.GithubToken)
-			if err != nil {
-				l.errLog(fmt.Sprintf("git pull failed: %v\n%s", err, out))
-				return
-			}
-			l.ok("git pull completed")
-			if out != "" {
-				l.info("  " + strings.ReplaceAll(out, "\n", "\n  "))
-			}
-
-			if cfg.NotifyOnPull {
-				notify("auto_pull", fmt.Sprintf("Pull done: %s@%s", filepath.Base(cfg.RepoPath), cfg.Branch))
-			}
-
-			if err := runPostCommand(cfg, l); err != nil {
-				l.errLog(fmt.Sprintf("post-pull command failed: %v", err))
-			} else if cfg.PostPullCommand != "" {
-				l.ok("post-pull command completed successfully")
+				processRepo(repo, cfg.GithubToken, l, st)
 			}
 		}()
 	}
+}
+
+type repoState struct {
+	consecutiveErrors int
+	backoffUntil      time.Time
+}
+
+type RepoWork struct {
+	RepoPath        string
+	Branch          string
+	PostPullCommand string
+	PostPullWorkdir string
+	NotifyOnPull    bool
+}
+
+func buildRepos(cfg *Config) []RepoWork {
+	if len(cfg.Repos) == 0 {
+		return []RepoWork{singleRepoFromLegacy(cfg)}
+	}
+
+	repos := make([]RepoWork, 0, len(cfg.Repos))
+	for _, r := range cfg.Repos {
+		branch := r.Branch
+		if branch == "" {
+			branch = "main"
+		}
+		repos = append(repos, RepoWork{
+			RepoPath:        r.RepoPath,
+			Branch:          branch,
+			PostPullCommand: r.PostPullCommand,
+			PostPullWorkdir: r.PostPullWorkdir,
+			NotifyOnPull:    r.NotifyOnPull,
+		})
+	}
+	return repos
+}
+
+func singleRepoFromLegacy(cfg *Config) RepoWork {
+	branch := cfg.Branch
+	if branch == "" {
+		branch = "main"
+	}
+	return RepoWork{
+		RepoPath:        cfg.RepoPath,
+		Branch:          branch,
+		PostPullCommand: cfg.PostPullCommand,
+		PostPullWorkdir: cfg.PostPullWorkdir,
+		NotifyOnPull:    cfg.NotifyOnPull,
+	}
+}
+
+func processRepo(repo RepoWork, token string, l *Logger, st *repoState) {
+	local, err := localCommit(repo.RepoPath)
+	if err != nil {
+		st.consecutiveErrors++
+		st.backoffUntil = time.Now().Add(backoffDuration(st.consecutiveErrors))
+		l.errLog(fmt.Sprintf("%s: git rev-parse (local) failed (%dx): %v", repo.RepoPath, st.consecutiveErrors, err))
+		return
+	}
+
+	remote, err := remoteCommit(repo.RepoPath, repo.Branch, token)
+	if err != nil {
+		st.consecutiveErrors++
+		st.backoffUntil = time.Now().Add(backoffDuration(st.consecutiveErrors))
+		l.errLog(fmt.Sprintf("%s: git fetch failed (%dx): %v", repo.RepoPath, st.consecutiveErrors, err))
+		return
+	}
+	st.consecutiveErrors = 0
+	st.backoffUntil = time.Time{}
+
+	if local == remote {
+		return
+	}
+
+	l.ok(fmt.Sprintf("%s: new commit detected: %s → %s", repo.RepoPath, local[:7], remote[:7]))
+
+	out, err := pull(repo.RepoPath, repo.Branch, token)
+	if err != nil {
+		l.errLog(fmt.Sprintf("%s: git pull failed: %v\n%s", repo.RepoPath, err, out))
+		return
+	}
+	l.ok(fmt.Sprintf("%s: git pull completed", repo.RepoPath))
+	if out != "" {
+		l.info("  " + strings.ReplaceAll(out, "\n", "\n  "))
+	}
+
+	if repo.NotifyOnPull {
+		notify("auto_pull", fmt.Sprintf("Pull done: %s@%s", filepath.Base(repo.RepoPath), repo.Branch))
+	}
+
+	repoCfg := Config{
+		RepoPath:        repo.RepoPath,
+		PostPullCommand: repo.PostPullCommand,
+		PostPullWorkdir: repo.PostPullWorkdir,
+	}
+	if err := runPostCommand(&repoCfg, l); err != nil {
+		l.errLog(fmt.Sprintf("%s: post-pull command failed: %v", repo.RepoPath, err))
+	} else if repo.PostPullCommand != "" {
+		l.ok(fmt.Sprintf("%s: post-pull command completed successfully", repo.RepoPath))
+	}
+}
+
+func backoffDuration(failures int) time.Duration {
+	if failures < 1 {
+		return 0
+	}
+	// exponential backoff with cap at 5 minutes
+	base := time.Second
+	d := base << (failures - 1)
+	max := 5 * time.Minute
+	if d > max {
+		return max
+	}
+	return d
 }
 
 func main() {

@@ -25,3 +25,14 @@ All notable changes to this project will be documented in this file.
   1. `./config_auto_pull.json` (current directory)
   2. `/etc/auto_pull/config_auto_pull.json` (fallback)
 - systemd service uses `/etc/auto_pull/config_auto_pull.json`.
+
+## [v1.0.2] - 2026-03-31
+
+### Added
+- Multiple repositories support via `repos` array in config.
+- Exponential backoff (capped) per repositório em falhas de git.
+- Env token fallback: usa `AUTOPULL_TOKEN` quando `github_token` está vazio.
+- Log rotation simples em ~5MB (`log_file.1`).
+
+### Changed
+- README documenta limitação de OS (Linux/macOS), multi-repo, backoff, log rotation e token por ambiente.

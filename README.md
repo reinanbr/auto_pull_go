@@ -6,6 +6,8 @@ Linux-first and distro-agnostic: you can distribute it as a portable `tar.gz` co
 
 After installation, the global command is `autopull`.
 
+OS support today: Linux and macOS (notifications). Windows is not supported in this build.
+
 ---
 
 ## Files
@@ -37,6 +39,8 @@ brew install go git
 
 ## Configuration (`config_auto_pull.json`)
 
+Single repo (legacy, still supported):
+
 ```json
 {
   "repo_path": "/path/to/your/repository",
@@ -49,6 +53,32 @@ brew install go git
   "notify_on_pull": true
 }
 ```
+
+Multiple repos (new):
+
+```json
+{
+  "check_interval_seconds": 5,
+  "log_file": "auto_pull.log",
+  "repos": [
+    {
+      "repo_path": "/path/one",
+      "branch": "main",
+      "post_pull_command": "",
+      "notify_on_pull": true
+    },
+    {
+      "repo_path": "/path/two",
+      "branch": "develop",
+      "post_pull_command": "make deploy",
+      "post_pull_workdir": "/path/two",
+      "notify_on_pull": false
+    }
+  ]
+}
+```
+
+Token via ambiente: se `github_token` estiver vazio, é lido de `AUTOPULL_TOKEN`.
 
 | Field | Description | Default |
 |---|---|---|
@@ -201,13 +231,15 @@ every N seconds:
 - Dual logging: file + stdout simultaneously
 - Optional desktop notifications (Linux: `notify-send`, macOS: `osascript`)
 - Config is reloaded on every tick — no restart needed for changes
+- Backoff: git failures use exponential backoff (cap 5m) per repo.
+- Log rotation: built-in rotation around 5MB (`log_file` → `log_file.1`).
 
-## Security and runtime notes
-
-- Git credentials: token is injected via a temporary `GIT_ASKPASS` script and `GIT_TOKEN` env var (no `GIT_PASSWORD` in env; prompt disabled with `GIT_TERMINAL_PROMPT=0`).
+- Git credentials: token is injected via a temporary `GIT_ASKPASS` script and `GIT_TOKEN` env var (no `GIT_PASSWORD` in env; prompt disabled with `GIT_TERMINAL_PROMPT=0`). If `github_token` estiver vazio, é lido de `AUTOPULL_TOKEN`.
 - Timeouts: all git commands run with a 15s timeout; failures are logged.
 - Concurrency: only one pull cycle runs at a time; overlapping ticks are skipped with a warning.
+- Backoff: git failures use exponential backoff (cap 5m) per repo.
 - post_pull_command: executed via `sh -c` — treat the config as trusted input. If untrusted, avoid enabling `post_pull_command` or wrap with your own validation.
+- Log rotation: built-in rotation around 5MB (`log_file` → `log_file.1`). For production, you can also wire logrotate.
 
 ---
 
