@@ -1,0 +1,35 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary and coverage
+*.test
+*.out
+coverage.out
+
+# Go workspace and vendor (optional; remova se versionar vendor)
+vendor/
+
+# Build directories
+bin/
+dist/
+build/
+auto_pull
+
+# Runtime artifacts
+auto_pull.log
+.auto_pull.pid
+
+# IDE/editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+.env
+.env.*.local
+

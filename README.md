@@ -2,6 +2,10 @@
 
 A daemon that monitors a GitHub repository and runs `git pull` + a custom command whenever a new commit is pushed.
 
+Linux-first and distro-agnostic: you can distribute it as a portable `tar.gz` containing the binary + installer.
+
+After installation, the global command is `autopull`.
+
 ---
 
 ## Files
@@ -63,6 +67,8 @@ brew install go git
 
 ## Usage
 
+### Local development
+
 ```bash
 chmod +x run.sh
 
@@ -83,10 +89,99 @@ chmod +x run.sh
 ```
 
 Or directly with Go:
+
 ```bash
 go build -o auto_pull main.go
 ./auto_pull                               # uses local config_auto_pull.json
 ./auto_pull /other/path/config.json
+```
+
+### Global command (installed)
+
+```bash
+autopull
+autopull /path/to/config_auto_pull.json
+```
+
+---
+
+## Distro-agnostic Linux distribution
+
+This repository now includes a portable Linux packaging structure:
+
+```
+packaging/linux/
+├── auto_pull.service
+├── config_auto_pull.example.json
+├── install.sh
+└── uninstall.sh
+
+scripts/
+└── release-linux.sh
+```
+
+### Build portable release (`tar.gz`)
+
+```bash
+./scripts/release-linux.sh v1.0.0
+```
+
+Output example:
+
+```bash
+dist/auto_pull_linux_amd64_v1.0.0.tar.gz
+```
+
+### Install on any Linux distro
+
+```bash
+tar -xzf dist/auto_pull_linux_amd64_v1.0.0.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.0.0
+sudo ./install.sh
+```
+
+What installer does:
+
+- installs binary in `/usr/local/bin/auto_pull`
+- creates global command `/usr/local/bin/autopull`
+- creates config in `/etc/auto_pull/config_auto_pull.json` (if missing)
+- creates log file in `/var/log/auto_pull/auto_pull.log`
+- installs and enables systemd unit when systemd is available
+
+### Global command from any folder
+
+After install, use:
+
+```bash
+autopull
+```
+
+Resolution order when you run `autopull` without arguments:
+
+- `./config_auto_pull.json` (current folder)
+- `/etc/auto_pull/config_auto_pull.json` (global fallback)
+
+Important:
+
+- `autopull` in terminal uses current folder first.
+- the `systemd` service always uses `/etc/auto_pull/config_auto_pull.json`.
+
+You can also pass an explicit config path:
+
+```bash
+autopull /path/to/config_auto_pull.json
+```
+
+### Uninstall
+
+```bash
+sudo ./uninstall.sh
+```
+
+Remove config/log folders too:
+
+```bash
+sudo ./uninstall.sh --purge
 ```
 
 ---
@@ -106,6 +201,24 @@ every N seconds:
 - Dual logging: file + stdout simultaneously
 - Optional desktop notifications (Linux: `notify-send`, macOS: `osascript`)
 - Config is reloaded on every tick — no restart needed for changes
+
+---
+
+## Quick start (Linux)
+
+```bash
+./scripts/release-linux.sh v1.0.1
+tar -xzf dist/auto_pull_linux_amd64_v1.0.1.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.0.1
+sudo ./install.sh
+```
+
+Then edit `/etc/auto_pull/config_auto_pull.json` or run from your project folder with local config:
+
+```bash
+cd /path/to/your/project
+autopull
+```
 
 ---
 
