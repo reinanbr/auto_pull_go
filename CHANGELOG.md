@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.3] - 2026-04-01
+
+### Added
+- CI now triggers on tags (`v*`) and publishes release binaries automatically; manual dispatch supported.
+
+### Changed
+- Version bumped to v1.1.3.
+
 ## [v1.1.2] - 2026-04-01
 
 ### Added

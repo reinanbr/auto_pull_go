@@ -93,7 +93,7 @@ func resolveConfigPath(p string) string {
 	return p
 }
 
-var version = "v1.1.2"
+var version = "v1.1.3"
 
 const gitTimeout = 15 * time.Second
 
