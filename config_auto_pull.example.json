@@ -1,13 +1,9 @@
 {
+  "repo_path": "/path/to/your/repository",
+  "branch": "main",
   "check_interval_seconds": 5,
+  "post_pull_command": "",
+  "post_pull_workdir": "",
   "log_file": "auto_pull.log",
-  "repos": [
-    {
-      "repo_path": "/path/to/your/repository",
-      "branch": "main",
-      "post_pull_command": "",
-      "post_pull_workdir": "",
-      "notify_on_pull": true
-    }
-  ]
+  "notify_on_pull": true
 }

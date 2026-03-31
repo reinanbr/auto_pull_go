@@ -2,10 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.0] - 2026-04-01
+
+### Added
+- `autopull dry-run` validates config and connectivity without pulling.
+
+### Changed
+- Config validation forbids `github_token` in JSON; tokens must come from environment variables or `.env`. Docs and examples updated accordingly.
+- CLI docs now match runtime state (status reports pid, pulls, errors/backoff, log path).
+
 ## [v1.0.8] - 2026-03-31
 
 ### Added
-- New CLI subcommands: `autopull init` (generate config in current git repo), `status` (pid + pulls + bytes + backoff + errors), `stop` (terminate daemon via pid), `logs` (tail recent log lines).
+- New CLI subcommands: `autopull init` (generate config in current git repo), `status` (pid + pulls + backoff + errors), `stop` (terminate daemon via pid), `logs` (tail recent log lines).
 - Runtime state persisted to `.auto_pull.state.json` (pull count, bytes transferred, last pull, consecutive errors, backoff).
 
 ### Changed
