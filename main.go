@@ -494,8 +494,24 @@ func stopProcess(pidPath string) (string, error) {
 		_ = os.Remove(pidPath)
 		return fmt.Sprintf("Process %d was suspended; sent SIGKILL and cleaned pid file", pid), nil
 	}
-	_ = syscall.Kill(pid, syscall.SIGTERM)
-	return fmt.Sprintf("Sent SIGTERM to %d", pid), nil
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return "", err
+	}
+
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) {
+			_ = os.Remove(pidPath)
+			return fmt.Sprintf("Stopped process %d", pid), nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		return "", err
+	}
+	_ = os.Remove(pidPath)
+	return fmt.Sprintf("Process %d did not stop with SIGTERM; sent SIGKILL", pid), nil
 }
 
 func loadRuntimeState(path string) *RuntimeState {
@@ -625,6 +641,11 @@ func watch(ctx context.Context, cfgPath string) {
 	running := false
 
 	for {
+		if ctx.Err() != nil {
+			l.info("shutting down (signal received)")
+			return
+		}
+
 		select {
 		case <-ctx.Done():
 			l.info("shutting down (signal received)")

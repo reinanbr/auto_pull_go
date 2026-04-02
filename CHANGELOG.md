@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - PID/state handling now detects suspended processes (`T` state on Linux). `autopull status` reports them as suspended, `autopull daemon` no longer mistakes them for active watchers, and `autopull stop` force-stops suspended instances.
+- `autopull stop` now waits for graceful SIGTERM shutdown and falls back to SIGKILL after timeout, reducing stuck background processes.
 
 ### Changed
 - CLI help/usage updated to include `daemon` and `service` commands.
