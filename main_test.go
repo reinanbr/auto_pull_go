@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,8 +21,8 @@ func TestShortHash(t *testing.T) {
 	}{
 		{"abc1234def567", "abc1234"},
 		{"abc1234", "abc1234"},
-		{"abc12", "abc12"},   // shorter than 7 — must not panic
-		{"", ""},             // empty — must not panic
+		{"abc12", "abc12"}, // shorter than 7 — must not panic
+		{"", ""},           // empty — must not panic
 		{"1234567890", "1234567"},
 	}
 	for _, tt := range tests {
@@ -48,7 +49,7 @@ func TestBackoffDuration(t *testing.T) {
 		{3, 4 * time.Second, 4 * time.Second},
 		{4, 8 * time.Second, 8 * time.Second},
 		{5, 16 * time.Second, 16 * time.Second},
-		{10, 5 * time.Minute, 5 * time.Minute}, // capped
+		{10, 5 * time.Minute, 5 * time.Minute},  // capped
 		{100, 5 * time.Minute, 5 * time.Minute}, // no overflow panic
 	}
 	for _, tt := range tests {
@@ -390,5 +391,52 @@ func TestResolveConfigPath_Custom(t *testing.T) {
 	got := resolveConfigPath("myconfig.json")
 	if !strings.HasSuffix(got, "myconfig.json") {
 		t.Errorf("resolveConfigPath(\"myconfig.json\") = %q, should end with myconfig.json", got)
+	}
+}
+
+// ─────────────────────────────────────────────
+// isRepoDirty
+// ─────────────────────────────────────────────
+
+func runGitTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+}
+
+func TestIsRepoDirty_IgnoresUntrackedFiles(t *testing.T) {
+	dir := t.TempDir()
+	runGitTest(t, dir, "init")
+
+	if err := os.WriteFile(filepath.Join(dir, "notes.tmp"), []byte("scratch"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if isRepoDirty(dir) {
+		t.Fatal("expected repo with only untracked files to be considered clean")
+	}
+}
+
+func TestIsRepoDirty_DetectsTrackedChanges(t *testing.T) {
+	dir := t.TempDir()
+	runGitTest(t, dir, "init")
+
+	tracked := filepath.Join(dir, "tracked.txt")
+	if err := os.WriteFile(tracked, []byte("v1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, dir, "add", "tracked.txt")
+	runGitTest(t, dir, "-c", "user.name=autopull-test", "-c", "user.email=autopull@test.local", "commit", "-m", "init")
+
+	if err := os.WriteFile(tracked, []byte("v2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if !isRepoDirty(dir) {
+		t.Fatal("expected repo with modified tracked files to be dirty")
 	}
 }

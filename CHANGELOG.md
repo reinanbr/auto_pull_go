@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.5] - 2026-04-02
+
+### Fixed
+- Dirty working tree check now ignores untracked files (`--untracked-files=no`), preventing self-block when `auto_pull.log` is created inside the repo.
+
+### Changed
+- Warning message now clarifies that only tracked uncommitted changes block pull.
+- Version bumped to v1.1.5.
+
 ## [v1.1.4] - 2026-03-31
 
 ### Fixed

@@ -26,9 +26,9 @@ curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.
 Manual install (from local build artifact):
 
 ```bash
-./scripts/release-linux.sh v1.1.4
-tar -xzf dist/auto_pull_linux_amd64_v1.1.4.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.1.4
+./scripts/release-linux.sh v1.1.5
+tar -xzf dist/auto_pull_linux_amd64_v1.1.5.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.1.5
 sudo ./install.sh
 ```
 
@@ -134,7 +134,7 @@ autopull logs 100 /etc/auto_pull/config_auto_pull.json
 every N seconds
   ├── git fetch origin <branch>
   ├── compare local HEAD with origin/<branch>
-  ├── dirty check — skip pull if working tree has uncommitted changes
+  ├── dirty check — skip pull if tracked files have uncommitted changes
   ├── if hashes differ → git pull origin <branch>
   └── run post_pull_command via sh -c
 ```
@@ -176,11 +176,11 @@ Environment=AUTOPULL_TOKEN=ghp_xxxxxxxxxxxx
 
 ```bash
 # build portable tar.gz
-./scripts/release-linux.sh v1.1.4
+./scripts/release-linux.sh v1.1.5
 
 # install
-tar -xzf dist/auto_pull_linux_amd64_v1.1.4.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.1.4
+tar -xzf dist/auto_pull_linux_amd64_v1.1.5.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.1.5
 sudo ./install.sh
 
 # uninstall

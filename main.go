@@ -93,7 +93,7 @@ func resolveConfigPath(p string) string {
 	return p
 }
 
-var version = "v1.1.4"
+var version = "v1.1.5"
 
 const gitTimeout = 15 * time.Second
 
@@ -351,7 +351,9 @@ func ensureGitRepo(path string) error {
 }
 
 func isRepoDirty(path string) bool {
-	out, err := runGit(path, "", "status", "--porcelain")
+	// Ignore untracked files (like auto_pull.log) so watcher artifacts do not
+	// permanently block pulls.
+	out, err := runGit(path, "", "status", "--porcelain", "--untracked-files=no")
 	if err != nil {
 		return false
 	}
@@ -643,7 +645,7 @@ func processRepo(cfg *Config, st *repoState, rs *RuntimeState, l *Logger) {
 	}
 
 	if isRepoDirty(cfg.RepoPath) {
-		l.warn("working tree has uncommitted changes — skipping pull to avoid conflicts")
+		l.warn("working tree has tracked uncommitted changes — skipping pull to avoid conflicts")
 		return
 	}
 
