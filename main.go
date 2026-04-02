@@ -452,6 +452,30 @@ func processAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
+func processStopped(pid int) bool {
+	if runtime.GOOS != "linux" || pid <= 0 {
+		return false
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	parts := strings.Fields(string(data))
+	if len(parts) < 3 {
+		return false
+	}
+	// Linux process state: 'T' = stopped (job control), 't' = tracing stop.
+	state := parts[2]
+	return state == "T" || state == "t"
+}
+
+func processRunning(pid int) bool {
+	if !processAlive(pid) {
+		return false
+	}
+	return !processStopped(pid)
+}
+
 func stopProcess(pidPath string) (string, error) {
 	pid, err := readPID(pidPath)
 	if err != nil {
@@ -463,6 +487,12 @@ func stopProcess(pidPath string) (string, error) {
 	if !processAlive(pid) {
 		_ = os.Remove(pidPath)
 		return fmt.Sprintf("Process %d not running; cleaned pid file", pid), nil
+	}
+	if processStopped(pid) {
+		// A suspended process will not handle SIGTERM until resumed.
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		_ = os.Remove(pidPath)
+		return fmt.Sprintf("Process %d was suspended; sent SIGKILL and cleaned pid file", pid), nil
 	}
 	_ = syscall.Kill(pid, syscall.SIGTERM)
 	return fmt.Sprintf("Sent SIGTERM to %d", pid), nil
@@ -746,7 +776,8 @@ func cmdStatus(cfgPath string) error {
 	}
 	pidPath := pidFilePath(cfgPath)
 	pid, pidErr := readPID(pidPath)
-	alive := pidErr == nil && processAlive(pid)
+	running := pidErr == nil && processRunning(pid)
+	stopped := pidErr == nil && processStopped(pid)
 	state := loadRuntimeState(stateFilePath(cfgPath))
 
 	fmt.Printf("Config  : %s\n", cfgPath)
@@ -754,8 +785,10 @@ func cmdStatus(cfgPath string) error {
 		fmt.Printf("Status  : stopped (no pid file)\n")
 	} else {
 		status := "stopped"
-		if alive {
+		if running {
 			status = "running"
+		} else if stopped {
+			status = "stopped (suspended)"
 		}
 		fmt.Printf("Status  : %s (pid %d)\n", status, pid)
 	}
@@ -855,7 +888,7 @@ func cmdDaemon(cfgPath string) error {
 	}
 
 	pidPath := pidFilePath(cfgPath)
-	if pid, err := readPID(pidPath); err == nil && processAlive(pid) {
+	if pid, err := readPID(pidPath); err == nil && processRunning(pid) {
 		fmt.Printf("already running in background (pid %d)\n", pid)
 		return nil
 	}

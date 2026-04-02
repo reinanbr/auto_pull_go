@@ -8,6 +8,9 @@ All notable changes to this project will be documented in this file.
 - New `autopull daemon` command to start watcher detached in background.
 - New `autopull service` command family for Linux systemd integration: `install`, `start`, `stop`, `restart`, `status`, `logs [N]`, `uninstall`.
 
+### Fixed
+- PID/state handling now detects suspended processes (`T` state on Linux). `autopull status` reports them as suspended, `autopull daemon` no longer mistakes them for active watchers, and `autopull stop` force-stops suspended instances.
+
 ### Changed
 - CLI help/usage updated to include `daemon` and `service` commands.
 - README expanded with native background and systemd command examples, including permission notes.
