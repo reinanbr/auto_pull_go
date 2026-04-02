@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -93,7 +94,7 @@ func resolveConfigPath(p string) string {
 	return p
 }
 
-var version = "v1.1.5"
+var version = "v1.1.6"
 
 const gitTimeout = 15 * time.Second
 
@@ -847,6 +848,182 @@ func cmdDryRun(cfgPath string) error {
 	return nil
 }
 
+func cmdDaemon(cfgPath string) error {
+	cfgPath = resolveConfigPath(cfgPath)
+	if _, err := os.Stat(cfgPath); err != nil {
+		return fmt.Errorf("config file not found: %s", cfgPath)
+	}
+
+	pidPath := pidFilePath(cfgPath)
+	if pid, err := readPID(pidPath); err == nil && processAlive(pid) {
+		fmt.Printf("already running in background (pid %d)\n", pid)
+		return nil
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot determine executable path: %w", err)
+	}
+
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("cannot open %s: %w", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	cmd := exec.Command(exe, cfgPath)
+	cmd.Stdin = devNull
+	cmd.Stdout = devNull
+	cmd.Stderr = devNull
+	cmd.Env = os.Environ()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start daemon: %w", err)
+	}
+
+	fmt.Printf("autopull started in background (pid %d)\n", cmd.Process.Pid)
+	fmt.Println("use 'autopull status' and 'autopull logs' to monitor")
+	return nil
+}
+
+const defaultServiceName = "autopull"
+
+func serviceUser() string {
+	if v := os.Getenv("AUTOPULL_SERVICE_USER"); strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if v := os.Getenv("SUDO_USER"); strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if v := os.Getenv("USER"); strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+func systemdUnitContent(execPath, cfgPath, runAsUser string) string {
+	return fmt.Sprintf(`[Unit]
+Description=autopull watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%q %q
+Restart=always
+RestartSec=3
+User=%s
+
+[Install]
+WantedBy=multi-user.target
+`, execPath, cfgPath, runAsUser)
+}
+
+func runCommand(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func cmdService(args []string) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("service command is only available on Linux")
+	}
+	if len(args) == 0 {
+		return fmt.Errorf("usage: autopull service <install|uninstall|start|stop|restart|status|logs> [config|lines]")
+	}
+
+	action := args[0]
+
+	switch action {
+	case "install":
+		cfgPath := ""
+		if len(args) > 1 {
+			cfgPath = args[1]
+		}
+		cfgPath = resolveConfigPath(cfgPath)
+		if _, err := os.Stat(cfgPath); err != nil {
+			return fmt.Errorf("config file not found: %s", cfgPath)
+		}
+
+		execPath, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("cannot determine executable path: %w", err)
+		}
+		execPath, _ = filepath.Abs(execPath)
+
+		runAsUser := serviceUser()
+		if runAsUser == "" {
+			return fmt.Errorf("could not determine service user; set AUTOPULL_SERVICE_USER")
+		}
+
+		servicePath := filepath.Join("/etc/systemd/system", defaultServiceName+".service")
+		content := systemdUnitContent(execPath, cfgPath, runAsUser)
+
+		if err := os.WriteFile(servicePath, []byte(content), 0644); err != nil {
+			return fmt.Errorf("failed to write %s (try with sudo): %w", servicePath, err)
+		}
+
+		if out, err := runCommand("systemctl", "daemon-reload"); err != nil {
+			return fmt.Errorf("systemctl daemon-reload failed: %v\n%s", err, out)
+		}
+		if out, err := runCommand("systemctl", "enable", "--now", defaultServiceName); err != nil {
+			return fmt.Errorf("systemctl enable --now failed: %v\n%s", err, out)
+		}
+
+		fmt.Printf("installed and started systemd service: %s\n", defaultServiceName)
+		return nil
+
+	case "uninstall":
+		if out, err := runCommand("systemctl", "disable", "--now", defaultServiceName); err != nil {
+			// keep going even if service wasn't active
+			fmt.Fprintf(os.Stderr, "warning: disable failed: %v\n%s\n", err, out)
+		}
+		servicePath := filepath.Join("/etc/systemd/system", defaultServiceName+".service")
+		if err := os.Remove(servicePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed removing %s: %w", servicePath, err)
+		}
+		if out, err := runCommand("systemctl", "daemon-reload"); err != nil {
+			return fmt.Errorf("systemctl daemon-reload failed: %v\n%s", err, out)
+		}
+		fmt.Printf("uninstalled systemd service: %s\n", defaultServiceName)
+		return nil
+
+	case "start", "stop", "restart", "status":
+		out, err := runCommand("systemctl", action, defaultServiceName)
+		if err != nil {
+			return fmt.Errorf("systemctl %s failed: %v\n%s", action, err, out)
+		}
+		if out != "" {
+			fmt.Println(out)
+		}
+		if action == "status" {
+			return nil
+		}
+		fmt.Printf("service %s: %s\n", defaultServiceName, action)
+		return nil
+
+	case "logs":
+		lines := "50"
+		if len(args) > 1 {
+			if _, err := strconv.Atoi(args[1]); err != nil {
+				return fmt.Errorf("logs expects a numeric line count")
+			}
+			lines = args[1]
+		}
+		out, err := runCommand("journalctl", "-u", defaultServiceName, "-n", lines, "--no-pager")
+		if err != nil {
+			return fmt.Errorf("journalctl failed: %v\n%s", err, out)
+		}
+		fmt.Println(out)
+		return nil
+
+	default:
+		return fmt.Errorf("unknown service action: %s", action)
+	}
+}
+
 // ─────────────────────────────────────────────
 // Entry point
 // ─────────────────────────────────────────────
@@ -855,11 +1032,13 @@ const usage = `Usage: autopull [command] [config_path]
 
 Commands:
   (none)           start watching (default config: ./config_auto_pull.json)
+	daemon           start watching in background (detached)
   init             create config_auto_pull.json for the current git repo
   status           show daemon status and stats
   stop             send SIGTERM to the running daemon
   logs [N]         print last N lines of the log (default: 50)
   dry-run          validate config and connectivity without pulling
+	service ...      systemd integration (install/start/stop/status/logs)
   --version, -v    print version
 
 Token for private repos:
@@ -891,6 +1070,17 @@ func main() {
 		}
 		if err := cmdInit(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "init: %v\n", err)
+			os.Exit(1)
+		}
+		return
+
+	case "daemon":
+		cfg := ""
+		if len(args) > 1 {
+			cfg = args[1]
+		}
+		if err := cmdDaemon(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -940,6 +1130,13 @@ func main() {
 		}
 		if err := cmdDryRun(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "dry-run: %v\n", err)
+			os.Exit(1)
+		}
+		return
+
+	case "service":
+		if err := cmdService(args[1:]); err != nil {
+			fmt.Fprintf(os.Stderr, "service: %v\n", err)
 			os.Exit(1)
 		}
 		return

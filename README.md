@@ -26,9 +26,9 @@ curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.
 Manual install (from local build artifact):
 
 ```bash
-./scripts/release-linux.sh v1.1.5
-tar -xzf dist/auto_pull_linux_amd64_v1.1.5.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.1.5
+./scripts/release-linux.sh v1.1.6
+tar -xzf dist/auto_pull_linux_amd64_v1.1.6.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.1.6
 sudo ./install.sh
 ```
 
@@ -111,11 +111,13 @@ autopull [command] [config]
 | Command | Description |
 |---|---|
 | *(none)* | Start the watcher (default config: `./config_auto_pull.json`) |
+| `daemon` | Start watcher detached in background |
 | `init` | Scaffold `config_auto_pull.json` for the current git repo |
 | `status` | Show daemon state: pid, pulls, errors, backoff, last pull |
 | `stop` | Send SIGTERM to the running daemon |
 | `logs [N]` | Print last N lines of the log (default: 50) |
 | `dry-run` | Validate config and test remote connectivity without pulling |
+| `service <action>` | Manage systemd service (`install`, `start`, `stop`, `restart`, `status`, `logs [N]`, `uninstall`) |
 | `--version` | Print version |
 | `--help` | Print this reference |
 
@@ -124,7 +126,49 @@ Config path can be passed as the last argument to any command:
 ```bash
 autopull status /etc/auto_pull/config_auto_pull.json
 autopull logs 100 /etc/auto_pull/config_auto_pull.json
+autopull daemon /etc/auto_pull/config_auto_pull.json
+autopull service install /etc/auto_pull/config_auto_pull.json
+autopull service status
+autopull service logs 100
 ```
+
+### Background mode (built-in)
+
+Start detached from your terminal using the native command:
+
+```bash
+autopull daemon /etc/auto_pull/config_auto_pull.json
+```
+
+Monitor and control as usual:
+
+```bash
+autopull status /etc/auto_pull/config_auto_pull.json
+autopull logs 100 /etc/auto_pull/config_auto_pull.json
+autopull stop /etc/auto_pull/config_auto_pull.json
+```
+
+`autopull daemon` runs the same watcher process in a detached session and reuses the same pid/state/log files.
+
+### Native systemd management (Linux)
+
+`autopull` can create and manage a systemd unit directly:
+
+```bash
+# requires root privileges to write /etc/systemd/system/autopull.service
+sudo autopull service install /etc/auto_pull/config_auto_pull.json
+
+autopull service status
+autopull service logs 200
+sudo autopull service restart
+sudo autopull service stop
+sudo autopull service uninstall
+```
+
+Notes:
+- `service` subcommands are available only on Linux.
+- `install`/`uninstall`/`start`/`stop`/`restart` usually require elevated permissions.
+- Service user is resolved from `AUTOPULL_SERVICE_USER`, then `SUDO_USER`, then `USER`.
 
 ---
 
@@ -176,11 +220,11 @@ Environment=AUTOPULL_TOKEN=ghp_xxxxxxxxxxxx
 
 ```bash
 # build portable tar.gz
-./scripts/release-linux.sh v1.1.5
+./scripts/release-linux.sh v1.1.6
 
 # install
-tar -xzf dist/auto_pull_linux_amd64_v1.1.5.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.1.5
+tar -xzf dist/auto_pull_linux_amd64_v1.1.6.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.1.6
 sudo ./install.sh
 
 # uninstall

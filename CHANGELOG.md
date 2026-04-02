@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.1.6] - 2026-04-02
+
+### Added
+- New `autopull daemon` command to start watcher detached in background.
+- New `autopull service` command family for Linux systemd integration: `install`, `start`, `stop`, `restart`, `status`, `logs [N]`, `uninstall`.
+
+### Changed
+- CLI help/usage updated to include `daemon` and `service` commands.
+- README expanded with native background and systemd command examples, including permission notes.
+- Version bumped to v1.1.6.
+
 ## [v1.1.5] - 2026-04-02
 
 ### Fixed
