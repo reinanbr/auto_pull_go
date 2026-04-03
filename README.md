@@ -67,7 +67,6 @@ Edit it as needed — it is reloaded on every tick, no restart required.
   "post_pull_workdir": "",
   "log_file": "auto_pull.log",
   "notify_on_pull": false,
-  "ignore_local_changes": false,
   "git_recovery_mode": "off"
 }
 ```
@@ -81,7 +80,6 @@ Edit it as needed — it is reloaded on every tick, no restart required.
 | `post_pull_workdir` | `repo_path` | Working directory for the post-pull command |
 | `log_file` | `auto_pull.log` | Log file path (absolute or relative to config) |
 | `notify_on_pull` | `true` | Desktop notification on pull (Linux: `notify-send`, macOS: `osascript`) |
-| `ignore_local_changes` | `false` | Discards local changes automatically (`git reset --hard HEAD` + `git clean -fd`) before pull |
 | `git_recovery_mode` | `off` | Auto-recovery strategy when git state blocks pull: `off`, `stash`, `hard-reset` |
 
 **`github_token` is not a valid field.** Tokens belong in the environment.
@@ -91,7 +89,15 @@ Edit it as needed — it is reloaded on every tick, no restart required.
 - `stash`: auto-stash local changes (`git stash push --include-untracked`) and continue.
 - `hard-reset`: force sync to `origin/<branch>` when local branch is ahead/diverged (destructive).
 
-When `ignore_local_changes` is `true`, local modifications are discarded automatically so pull is not blocked by dirty tracked files or local divergence. This is destructive and best for deployment-only clones.
+Recommended for deployment clones: keep daemon runtime files ignored in the application repository.
+
+```bash
+echo 'auto_pull.log' >> .gitignore
+echo 'auto_pull.log.1' >> .gitignore
+echo '.auto_pull.pid' >> .gitignore
+echo '.auto_pull.state.json' >> .gitignore
+echo 'config_auto_pull.json' >> .gitignore
+```
 
 ---
 

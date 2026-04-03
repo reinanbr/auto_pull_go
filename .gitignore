@@ -18,11 +18,14 @@ bin/
 dist/
 build/
 auto_pull
+auto_pull_go
 config_auto_pull.json
 
 # Runtime artifacts
 auto_pull.log
+auto_pull.log.1
 .auto_pull.pid
+.auto_pull.state.json
 
 # IDE/editor
 .vscode/
