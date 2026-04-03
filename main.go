@@ -31,6 +31,7 @@ type Config struct {
 	PostPullWorkdir      string `json:"post_pull_workdir"`
 	LogFile              string `json:"log_file"`
 	NotifyOnPull         bool   `json:"notify_on_pull"`
+	IgnoreLocalChanges   bool   `json:"ignore_local_changes"`
 	GitRecoveryMode      string `json:"git_recovery_mode"`
 
 	// GithubToken is intentionally excluded from JSON serialization.
@@ -47,6 +48,7 @@ type configFile struct {
 	PostPullWorkdir      string `json:"post_pull_workdir"`
 	LogFile              string `json:"log_file"`
 	NotifyOnPull         bool   `json:"notify_on_pull"`
+	IgnoreLocalChanges   bool   `json:"ignore_local_changes"`
 	GitRecoveryMode      string `json:"git_recovery_mode"`
 }
 
@@ -96,7 +98,7 @@ func resolveConfigPath(p string) string {
 	return p
 }
 
-var version = "v1.2.0"
+var version = "v1.2.1"
 
 const gitTimeout = 15 * time.Second
 
@@ -137,6 +139,7 @@ func loadConfig(path string) (*Config, error) {
 		PostPullWorkdir:      cf.PostPullWorkdir,
 		LogFile:              cf.LogFile,
 		NotifyOnPull:         cf.NotifyOnPull,
+		IgnoreLocalChanges:   cf.IgnoreLocalChanges,
 		GitRecoveryMode:      normalizeRecoveryMode(cf.GitRecoveryMode),
 	}
 
@@ -435,6 +438,19 @@ func autoStash(path string) (string, error) {
 
 func autoHardReset(path, branch string) (string, error) {
 	return runGit(path, "", "reset", "--hard", fmt.Sprintf("origin/%s", branch))
+}
+
+func discardLocalChanges(path string) (string, error) {
+	outReset, err := runGit(path, "", "reset", "--hard", "HEAD")
+	if err != nil {
+		return outReset, err
+	}
+	outClean, err := runGit(path, "", "clean", "-fd")
+	out := strings.TrimSpace(strings.TrimSpace(outReset) + "\n" + strings.TrimSpace(outClean))
+	if err != nil {
+		return out, err
+	}
+	return out, nil
 }
 
 func gitRecoveryHints(ahead, behind int, dirty bool) []string {
@@ -756,6 +772,7 @@ func watch(ctx context.Context, cfgPath string) {
 	l.info(fmt.Sprintf("  branch  : %s", cfg.Branch))
 	l.info(fmt.Sprintf("  interval: %ds", cfg.CheckIntervalSeconds))
 	l.info(fmt.Sprintf("  log     : %s", logPath))
+	l.info(fmt.Sprintf("  ignore-local: %t", cfg.IgnoreLocalChanges))
 	l.info(fmt.Sprintf("  recovery: %s", cfg.GitRecoveryMode))
 	if cfg.GithubToken != "" {
 		l.info("  token   : (set)")
@@ -853,47 +870,70 @@ func processRepo(cfg *Config, st *repoState, rs *RuntimeState, l *Logger) {
 
 	dirty := isRepoDirty(cfg.RepoPath)
 	if dirty {
-		switch cfg.GitRecoveryMode {
-		case "stash":
-			out, stashErr := autoStash(cfg.RepoPath)
-			if stashErr != nil {
-				l.errLog(fmt.Sprintf("auto-recovery stash failed: %v\n%s", stashErr, out))
+		if cfg.IgnoreLocalChanges {
+			out, discardErr := discardLocalChanges(cfg.RepoPath)
+			if discardErr != nil {
+				l.errLog(fmt.Sprintf("ignore_local_changes failed: %v\n%s", discardErr, out))
 				return
 			}
-			l.warn("auto-recovery applied: stashed local changes to continue pull")
-		default:
-			l.warn("working tree has tracked uncommitted changes — skipping pull to avoid conflicts")
-			for _, hint := range gitRecoveryHints(ahead, behind, true) {
-				l.warn("hint: " + hint)
+			l.warn("ignore_local_changes applied: local changes were discarded")
+		} else {
+			switch cfg.GitRecoveryMode {
+			case "stash":
+				out, stashErr := autoStash(cfg.RepoPath)
+				if stashErr != nil {
+					l.errLog(fmt.Sprintf("auto-recovery stash failed: %v\n%s", stashErr, out))
+					return
+				}
+				l.warn("auto-recovery applied: stashed local changes to continue pull")
+			default:
+				l.warn("working tree has tracked uncommitted changes — skipping pull to avoid conflicts")
+				for _, hint := range gitRecoveryHints(ahead, behind, true) {
+					l.warn("hint: " + hint)
+				}
+				return
 			}
-			return
 		}
 	}
 
 	if ahead > 0 {
-		switch cfg.GitRecoveryMode {
-		case "hard-reset":
+		if cfg.IgnoreLocalChanges {
 			out, resetErr := autoHardReset(cfg.RepoPath, cfg.Branch)
 			if resetErr != nil {
-				l.errLog(fmt.Sprintf("auto-recovery hard-reset failed: %v\n%s", resetErr, out))
+				l.errLog(fmt.Sprintf("ignore_local_changes hard-reset failed: %v\n%s", resetErr, out))
 				return
 			}
-			l.warn("auto-recovery applied: hard-reset to origin branch")
+			l.warn("ignore_local_changes applied: local branch force-synced to origin")
 			local, err = localCommit(cfg.RepoPath)
 			if err != nil {
-				l.errLog(fmt.Sprintf("local commit check failed after hard-reset: %v", err))
+				l.errLog(fmt.Sprintf("local commit check failed after ignore_local_changes reset: %v", err))
 				return
 			}
-		default:
-			if behind > 0 {
-				l.warn(fmt.Sprintf("branch diverged (ahead %d, behind %d) — skipping pull", ahead, behind))
-			} else {
-				l.warn(fmt.Sprintf("local branch ahead by %d commit(s) — skipping pull", ahead))
+		} else {
+			switch cfg.GitRecoveryMode {
+			case "hard-reset":
+				out, resetErr := autoHardReset(cfg.RepoPath, cfg.Branch)
+				if resetErr != nil {
+					l.errLog(fmt.Sprintf("auto-recovery hard-reset failed: %v\n%s", resetErr, out))
+					return
+				}
+				l.warn("auto-recovery applied: hard-reset to origin branch")
+				local, err = localCommit(cfg.RepoPath)
+				if err != nil {
+					l.errLog(fmt.Sprintf("local commit check failed after hard-reset: %v", err))
+					return
+				}
+			default:
+				if behind > 0 {
+					l.warn(fmt.Sprintf("branch diverged (ahead %d, behind %d) — skipping pull", ahead, behind))
+				} else {
+					l.warn(fmt.Sprintf("local branch ahead by %d commit(s) — skipping pull", ahead))
+				}
+				for _, hint := range gitRecoveryHints(ahead, behind, false) {
+					l.warn("hint: " + hint)
+				}
+				return
 			}
-			for _, hint := range gitRecoveryHints(ahead, behind, false) {
-				l.warn("hint: " + hint)
-			}
-			return
 		}
 	}
 
@@ -952,6 +992,7 @@ func cmdInit(cfgPath string) error {
 		PostPullWorkdir:      "",
 		LogFile:              "auto_pull.log",
 		NotifyOnPull:         true,
+		IgnoreLocalChanges:   false,
 		GitRecoveryMode:      "off",
 	}
 	if err := writeConfig(cfgPath, cf); err != nil {
@@ -1055,6 +1096,7 @@ func cmdStatus(cfgPath string) error {
 		}
 	}
 	fmt.Printf("Recovery: %s (config git_recovery_mode)\n", cfg.GitRecoveryMode)
+	fmt.Printf("Ignore  : %t (config ignore_local_changes)\n", cfg.IgnoreLocalChanges)
 	return nil
 }
 

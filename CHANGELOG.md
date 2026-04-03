@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.2.1] - 2026-04-02
+
+### Added
+- New config option `ignore_local_changes` for deployment-only servers that should always follow remote.
+
+### Changed
+- When `ignore_local_changes=true`, autopull automatically discards local tracked changes and untracked files before attempting pull.
+- When local branch is ahead/diverged and `ignore_local_changes=true`, autopull force-syncs to `origin/<branch>` and continues.
+- Version bumped to v1.2.1.
+
 ## [v1.2.0] - 2026-04-02
 
 ### Added
@@ -11,6 +21,7 @@ All notable changes to this project will be documented in this file.
   - ahead/behind counters versus `origin/<branch>`
   - actionable recovery hints for common blocked states
 - New config field `git_recovery_mode` with supported values: `off`, `stash`, `hard-reset`.
+- New config field `ignore_local_changes` to discard local changes automatically and keep pull flow unblocked in deployment clones.
 
 ### Changed
 - Watcher now emits clearer guidance for blocked pulls (dirty tree, diverged branch, auth/ref failures).
