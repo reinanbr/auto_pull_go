@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.2.0] - 2026-04-02
+
+### Added
+- New `start` command as an alias to `autopull daemon` (built-in detached watcher).
+- `autopull status` now performs git diagnostics and reports:
+  - tracked dirty files (up to 5 entries)
+  - ahead/behind counters versus `origin/<branch>`
+  - actionable recovery hints for common blocked states
+- New config field `git_recovery_mode` with supported values: `off`, `stash`, `hard-reset`.
+
+### Changed
+- Watcher now emits clearer guidance for blocked pulls (dirty tree, diverged branch, auth/ref failures).
+- Optional automatic recovery behavior:
+  - `stash`: stashes local changes and continues pull.
+  - `hard-reset`: force-syncs local branch to `origin/<branch>` when ahead/diverged.
+- Unknown command handling is stricter and no longer misinterprets arbitrary words as config paths.
+- Version bumped to v1.2.0.
+
 ## [v1.1.6] - 2026-04-02
 
 ### Added

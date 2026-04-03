@@ -31,6 +31,7 @@ type Config struct {
 	PostPullWorkdir      string `json:"post_pull_workdir"`
 	LogFile              string `json:"log_file"`
 	NotifyOnPull         bool   `json:"notify_on_pull"`
+	GitRecoveryMode      string `json:"git_recovery_mode"`
 
 	// GithubToken is intentionally excluded from JSON serialization.
 	// Set via AUTOPULL_TOKEN or GITHUB_TOKEN env var, or .env file in repo_path.
@@ -46,6 +47,7 @@ type configFile struct {
 	PostPullWorkdir      string `json:"post_pull_workdir"`
 	LogFile              string `json:"log_file"`
 	NotifyOnPull         bool   `json:"notify_on_pull"`
+	GitRecoveryMode      string `json:"git_recovery_mode"`
 }
 
 func loadDotEnvToken(baseDir string) string {
@@ -94,7 +96,7 @@ func resolveConfigPath(p string) string {
 	return p
 }
 
-var version = "v1.1.6"
+var version = "v1.2.0"
 
 const gitTimeout = 15 * time.Second
 
@@ -135,6 +137,7 @@ func loadConfig(path string) (*Config, error) {
 		PostPullWorkdir:      cf.PostPullWorkdir,
 		LogFile:              cf.LogFile,
 		NotifyOnPull:         cf.NotifyOnPull,
+		GitRecoveryMode:      normalizeRecoveryMode(cf.GitRecoveryMode),
 	}
 
 	// defaults
@@ -160,6 +163,20 @@ func loadConfig(path string) (*Config, error) {
 	cfg.GithubToken = token
 
 	return cfg, nil
+}
+
+func normalizeRecoveryMode(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "", "off":
+		return "off"
+	case "stash":
+		return "stash"
+	case "hard-reset":
+		return "hard-reset"
+	default:
+		return "off"
+	}
 }
 
 func writeConfig(path string, cfg configFile) error {
@@ -359,6 +376,120 @@ func isRepoDirty(path string) bool {
 		return false
 	}
 	return strings.TrimSpace(out) != ""
+}
+
+func trackedChanges(path string) ([]string, error) {
+	out, err := runGit(path, "", "status", "--porcelain", "--untracked-files=no")
+	if err != nil {
+		return nil, err
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return nil, nil
+	}
+	lines := strings.Split(out, "\n")
+	res := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		res = append(res, line)
+	}
+	return res, nil
+}
+
+func currentBranch(path string) (string, error) {
+	return runGit(path, "", "rev-parse", "--abbrev-ref", "HEAD")
+}
+
+func parseAheadBehind(raw string) (int, int, error) {
+	fields := strings.Fields(strings.TrimSpace(raw))
+	if len(fields) != 2 {
+		return 0, 0, fmt.Errorf("unexpected rev-list output: %q", raw)
+	}
+	ahead, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	behind, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	return ahead, behind, nil
+}
+
+func aheadBehind(path, branch string) (int, int, error) {
+	raw, err := runGit(path, "", "rev-list", "--left-right", "--count", fmt.Sprintf("HEAD...origin/%s", branch))
+	if err != nil {
+		return 0, 0, err
+	}
+	return parseAheadBehind(raw)
+}
+
+func autoStash(path string) (string, error) {
+	stamp := time.Now().Format("20060102-150405")
+	msg := fmt.Sprintf("autopull-auto-stash-%s", stamp)
+	return runGit(path, "", "stash", "push", "--include-untracked", "-m", msg)
+}
+
+func autoHardReset(path, branch string) (string, error) {
+	return runGit(path, "", "reset", "--hard", fmt.Sprintf("origin/%s", branch))
+}
+
+func gitRecoveryHints(ahead, behind int, dirty bool) []string {
+	hints := []string{}
+	if dirty {
+		hints = append(hints,
+			"Working tree is dirty. Resolve with: git add -A && git commit -m \"save local changes\"",
+			"Or temporarily shelve changes: git stash push -m \"autopull-temp\"",
+			"Or discard local modifications: git reset --hard HEAD",
+		)
+	}
+	if ahead > 0 && behind > 0 {
+		hints = append(hints,
+			"Branch is diverged. To mirror remote exactly: git fetch origin && git reset --hard origin/<branch>",
+			"If you need local commits, rebase first: git pull --rebase origin <branch>",
+		)
+	} else if ahead > 0 {
+		hints = append(hints,
+			"Local branch is ahead of origin. Push local commits or reset to remote.",
+		)
+	} else if behind > 0 {
+		hints = append(hints,
+			"Local branch is behind origin. A pull should fast-forward once working tree is clean.",
+		)
+	}
+	return hints
+}
+
+func gitPullErrorHints(msg string) []string {
+	raw := strings.ToLower(msg)
+	hints := []string{}
+	switch {
+	case strings.Contains(raw, "authentication failed"),
+		strings.Contains(raw, "repository not found"),
+		strings.Contains(raw, "could not read from remote repository"):
+		hints = append(hints,
+			"Authentication failed. Check AUTOPULL_TOKEN/GITHUB_TOKEN or SSH key access.",
+		)
+	case strings.Contains(raw, "couldn't find remote ref"),
+		strings.Contains(raw, "unknown revision"):
+		hints = append(hints,
+			"Branch reference not found on origin. Confirm config.branch and run: git branch -r",
+		)
+	case strings.Contains(raw, "merge conflict"),
+		strings.Contains(raw, "conflict"):
+		hints = append(hints,
+			"Pull created conflicts. Resolve manually and commit, or force sync: git fetch origin && git reset --hard origin/<branch>",
+		)
+	case strings.Contains(raw, "would be overwritten by merge"),
+		strings.Contains(raw, "local changes"):
+		hints = append(hints,
+			"Local tracked changes are blocking pull. Commit/stash/discard local modifications first.",
+		)
+	}
+	return hints
 }
 
 // ─────────────────────────────────────────────
@@ -625,6 +756,7 @@ func watch(ctx context.Context, cfgPath string) {
 	l.info(fmt.Sprintf("  branch  : %s", cfg.Branch))
 	l.info(fmt.Sprintf("  interval: %ds", cfg.CheckIntervalSeconds))
 	l.info(fmt.Sprintf("  log     : %s", logPath))
+	l.info(fmt.Sprintf("  recovery: %s", cfg.GitRecoveryMode))
 	if cfg.GithubToken != "" {
 		l.info("  token   : (set)")
 	}
@@ -696,11 +828,6 @@ func processRepo(cfg *Config, st *repoState, rs *RuntimeState, l *Logger) {
 		return
 	}
 
-	if isRepoDirty(cfg.RepoPath) {
-		l.warn("working tree has tracked uncommitted changes — skipping pull to avoid conflicts")
-		return
-	}
-
 	remote, err := remoteCommit(cfg.RepoPath, cfg.Branch, cfg.GithubToken)
 	if err != nil {
 		st.consecutiveErrors++
@@ -719,6 +846,57 @@ func processRepo(cfg *Config, st *repoState, rs *RuntimeState, l *Logger) {
 	rs.BackoffUntil = time.Time{}
 	rs.LastError = ""
 
+	ahead, behind, err := aheadBehind(cfg.RepoPath, cfg.Branch)
+	if err != nil {
+		l.warn(fmt.Sprintf("could not compute ahead/behind: %v", err))
+	}
+
+	dirty := isRepoDirty(cfg.RepoPath)
+	if dirty {
+		switch cfg.GitRecoveryMode {
+		case "stash":
+			out, stashErr := autoStash(cfg.RepoPath)
+			if stashErr != nil {
+				l.errLog(fmt.Sprintf("auto-recovery stash failed: %v\n%s", stashErr, out))
+				return
+			}
+			l.warn("auto-recovery applied: stashed local changes to continue pull")
+		default:
+			l.warn("working tree has tracked uncommitted changes — skipping pull to avoid conflicts")
+			for _, hint := range gitRecoveryHints(ahead, behind, true) {
+				l.warn("hint: " + hint)
+			}
+			return
+		}
+	}
+
+	if ahead > 0 {
+		switch cfg.GitRecoveryMode {
+		case "hard-reset":
+			out, resetErr := autoHardReset(cfg.RepoPath, cfg.Branch)
+			if resetErr != nil {
+				l.errLog(fmt.Sprintf("auto-recovery hard-reset failed: %v\n%s", resetErr, out))
+				return
+			}
+			l.warn("auto-recovery applied: hard-reset to origin branch")
+			local, err = localCommit(cfg.RepoPath)
+			if err != nil {
+				l.errLog(fmt.Sprintf("local commit check failed after hard-reset: %v", err))
+				return
+			}
+		default:
+			if behind > 0 {
+				l.warn(fmt.Sprintf("branch diverged (ahead %d, behind %d) — skipping pull", ahead, behind))
+			} else {
+				l.warn(fmt.Sprintf("local branch ahead by %d commit(s) — skipping pull", ahead))
+			}
+			for _, hint := range gitRecoveryHints(ahead, behind, false) {
+				l.warn("hint: " + hint)
+			}
+			return
+		}
+	}
+
 	if local == remote {
 		return // nothing new
 	}
@@ -728,6 +906,9 @@ func processRepo(cfg *Config, st *repoState, rs *RuntimeState, l *Logger) {
 	out, err := pull(cfg.RepoPath, cfg.Branch, cfg.GithubToken)
 	if err != nil {
 		l.errLog(fmt.Sprintf("git pull failed: %v\n%s", err, out))
+		for _, hint := range gitPullErrorHints(err.Error() + "\n" + out) {
+			l.warn("hint: " + hint)
+		}
 		return
 	}
 	l.ok("git pull completed")
@@ -771,6 +952,7 @@ func cmdInit(cfgPath string) error {
 		PostPullWorkdir:      "",
 		LogFile:              "auto_pull.log",
 		NotifyOnPull:         true,
+		GitRecoveryMode:      "off",
 	}
 	if err := writeConfig(cfgPath, cf); err != nil {
 		return err
@@ -827,6 +1009,52 @@ func cmdStatus(cfgPath string) error {
 		fmt.Printf("Last err: %s\n", state.LastError)
 	}
 	fmt.Printf("Log     : %s\n", logPath)
+
+	fmt.Println("Git     :")
+	branch, err := currentBranch(cfg.RepoPath)
+	if err != nil {
+		fmt.Printf("  branch: failed to read current branch: %v\n", err)
+	} else {
+		fmt.Printf("  branch: %s (config: %s)\n", branch, cfg.Branch)
+	}
+
+	changes, err := trackedChanges(cfg.RepoPath)
+	if err != nil {
+		fmt.Printf("  dirty : check failed: %v\n", err)
+	} else if len(changes) == 0 {
+		fmt.Printf("  dirty : no tracked local changes\n")
+	} else {
+		fmt.Printf("  dirty : yes (%d tracked change(s))\n", len(changes))
+		for i, line := range changes {
+			if i >= 5 {
+				fmt.Printf("  dirty : ... and %d more\n", len(changes)-i)
+				break
+			}
+			fmt.Printf("  dirty : %s\n", line)
+		}
+	}
+
+	fetchErr := ""
+	if _, err := runGit(cfg.RepoPath, cfg.GithubToken, "fetch", "origin", cfg.Branch); err != nil {
+		fetchErr = err.Error()
+	}
+	if fetchErr != "" {
+		fmt.Printf("  remote: fetch failed: %s\n", fetchErr)
+		for _, hint := range gitPullErrorHints(fetchErr) {
+			fmt.Printf("  hint  : %s\n", hint)
+		}
+	} else {
+		ahead, behind, err := aheadBehind(cfg.RepoPath, cfg.Branch)
+		if err != nil {
+			fmt.Printf("  sync  : failed to compare with origin/%s: %v\n", cfg.Branch, err)
+		} else {
+			fmt.Printf("  sync  : ahead %d, behind %d\n", ahead, behind)
+			for _, hint := range gitRecoveryHints(ahead, behind, len(changes) > 0) {
+				fmt.Printf("  hint  : %s\n", hint)
+			}
+		}
+	}
+	fmt.Printf("Recovery: %s (config git_recovery_mode)\n", cfg.GitRecoveryMode)
 	return nil
 }
 
@@ -1087,6 +1315,7 @@ const usage = `Usage: autopull [command] [config_path]
 Commands:
   (none)           start watching (default config: ./config_auto_pull.json)
 	daemon           start watching in background (detached)
+	start            alias for 'daemon'
   init             create config_auto_pull.json for the current git repo
   status           show daemon status and stats
   stop             send SIGTERM to the running daemon
@@ -1135,6 +1364,17 @@ func main() {
 		}
 		if err := cmdDaemon(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "daemon: %v\n", err)
+			os.Exit(1)
+		}
+		return
+
+	case "start":
+		cfg := ""
+		if len(args) > 1 {
+			cfg = args[1]
+		}
+		if err := cmdDaemon(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "start: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -1196,8 +1436,16 @@ func main() {
 		return
 	}
 
-	// backward compatible: treat argument as config path
-	runWatcher(args[len(args)-1])
+	// backward compatible: treat argument as config path if it looks like one
+	candidate := args[len(args)-1]
+	if strings.HasSuffix(candidate, ".json") {
+		runWatcher(candidate)
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", args[0])
+	fmt.Print(usage)
+	os.Exit(1)
 }
 
 func runWatcher(cfgPath string) {

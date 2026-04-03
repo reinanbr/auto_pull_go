@@ -27,8 +27,8 @@ Manual install (from local build artifact):
 
 ```bash
 ./scripts/release-linux.sh v1.1.6
-tar -xzf dist/auto_pull_linux_amd64_v1.1.6.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.1.6
+tar -xzf dist/auto_pull_linux_amd64_v1.2.0.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.2.0
 sudo ./install.sh
 ```
 
@@ -66,7 +66,8 @@ Edit it as needed — it is reloaded on every tick, no restart required.
   "post_pull_command": "systemctl restart myapp",
   "post_pull_workdir": "",
   "log_file": "auto_pull.log",
-  "notify_on_pull": false
+  "notify_on_pull": false,
+  "git_recovery_mode": "off"
 }
 ```
 
@@ -79,8 +80,14 @@ Edit it as needed — it is reloaded on every tick, no restart required.
 | `post_pull_workdir` | `repo_path` | Working directory for the post-pull command |
 | `log_file` | `auto_pull.log` | Log file path (absolute or relative to config) |
 | `notify_on_pull` | `true` | Desktop notification on pull (Linux: `notify-send`, macOS: `osascript`) |
+| `git_recovery_mode` | `off` | Auto-recovery strategy when git state blocks pull: `off`, `stash`, `hard-reset` |
 
 **`github_token` is not a valid field.** Tokens belong in the environment.
+
+`git_recovery_mode` values:
+- `off`: only diagnose and log exact recovery commands.
+- `stash`: auto-stash local changes (`git stash push --include-untracked`) and continue.
+- `hard-reset`: force sync to `origin/<branch>` when local branch is ahead/diverged (destructive).
 
 ---
 
@@ -112,8 +119,9 @@ autopull [command] [config]
 |---|---|
 | *(none)* | Start the watcher (default config: `./config_auto_pull.json`) |
 | `daemon` | Start watcher detached in background |
+| `start` | Alias for `daemon` |
 | `init` | Scaffold `config_auto_pull.json` for the current git repo |
-| `status` | Show daemon state: pid, pulls, errors, backoff, last pull |
+| `status` | Show daemon state plus git diagnostics: dirty files, ahead/behind, and recovery hints |
 | `stop` | Send SIGTERM to the running daemon |
 | `logs [N]` | Print last N lines of the log (default: 50) |
 | `dry-run` | Validate config and test remote connectivity without pulling |
@@ -138,6 +146,8 @@ Start detached from your terminal using the native command:
 
 ```bash
 autopull daemon /etc/auto_pull/config_auto_pull.json
+# equivalent alias
+autopull start /etc/auto_pull/config_auto_pull.json
 ```
 
 Monitor and control as usual:
@@ -149,6 +159,10 @@ autopull stop /etc/auto_pull/config_auto_pull.json
 ```
 
 `autopull daemon` runs the same watcher process in a detached session and reuses the same pid/state/log files.
+
+Important:
+- `autopull daemon` (or `autopull start`) starts the built-in background watcher.
+- `autopull service start` controls the Linux systemd service.
 
 ### Native systemd management (Linux)
 

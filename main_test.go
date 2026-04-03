@@ -394,6 +394,41 @@ func TestResolveConfigPath_Custom(t *testing.T) {
 	}
 }
 
+func TestNormalizeRecoveryMode(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"", "off"},
+		{"off", "off"},
+		{"stash", "stash"},
+		{"hard-reset", "hard-reset"},
+		{" HARD-RESET ", "hard-reset"},
+		{"invalid", "off"},
+	}
+
+	for _, tt := range tests {
+		got := normalizeRecoveryMode(tt.in)
+		if got != tt.want {
+			t.Errorf("normalizeRecoveryMode(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestParseAheadBehind(t *testing.T) {
+	ahead, behind, err := parseAheadBehind("2\t3")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ahead != 2 || behind != 3 {
+		t.Fatalf("got ahead=%d behind=%d, want ahead=2 behind=3", ahead, behind)
+	}
+
+	if _, _, err := parseAheadBehind("bad output"); err == nil {
+		t.Fatal("expected parse error for invalid output")
+	}
+}
+
 // ─────────────────────────────────────────────
 // isRepoDirty
 // ─────────────────────────────────────────────
