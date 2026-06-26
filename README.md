@@ -26,9 +26,9 @@ curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.
 Manual install (from local build artifact):
 
 ```bash
-./scripts/release-linux.sh v1.2.1
-tar -xzf dist/auto_pull_linux_amd64_v1.2.1.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.2.1
+./scripts/release-linux.sh v1.2.3
+tar -xzf dist/auto_pull_linux_amd64_v1.2.3.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.2.3
 sudo ./install.sh
 ```
 
@@ -56,7 +56,8 @@ autopull             # start watching
 ## Configuration
 
 `autopull init` creates `config_auto_pull.json` in the current repo.  
-Edit it as needed — it is reloaded on every tick, no restart required.
+Edit it as needed — every field is reloaded on every tick, no restart required.  
+Changes to `check_interval_seconds` reset the polling timer immediately.
 
 ```json
 {
@@ -200,6 +201,7 @@ Notes:
 
 ```
 every N seconds
+  ├── reload config_auto_pull.json (no restart needed)
   ├── git fetch origin <branch>
   ├── compare local HEAD with origin/<branch>
   ├── dirty check — skip pull if tracked files have uncommitted changes
@@ -208,9 +210,9 @@ every N seconds
 ```
 
 - **No GitHub API** — uses native `git fetch` + hash comparison  
+- **Hot config reload** — `config_auto_pull.json` is re-read every tick; changes to any field (including `check_interval_seconds`) take effect immediately  
 - **15s timeout** on every git command; failures are logged and backed off  
 - **Exponential backoff** on consecutive failures, capped at 5 minutes  
-- **Overlapping ticks are skipped** — only one cycle runs at a time  
 - **Log rotation** at ~5 MB (`auto_pull.log` → `auto_pull.log.1`); override with `AUTOPULL_LOG_MAX_BYTES`  
 - **Token injection** via temporary `GIT_ASKPASS` script; `GIT_TERMINAL_PROMPT=0` prevents interactive prompts  
 - **Graceful shutdown** on `SIGINT`/`SIGTERM` — logger is flushed and closed  
@@ -244,11 +246,11 @@ Environment=AUTOPULL_TOKEN=ghp_xxxxxxxxxxxx
 
 ```bash
 # build portable tar.gz
-./scripts/release-linux.sh v1.1.6
+./scripts/release-linux.sh v1.2.3
 
 # install
-tar -xzf dist/auto_pull_linux_amd64_v1.1.6.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.1.6
+tar -xzf dist/auto_pull_linux_amd64_v1.2.3.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.2.3
 sudo ./install.sh
 
 # uninstall

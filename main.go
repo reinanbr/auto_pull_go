@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -96,7 +95,7 @@ func resolveConfigPath(p string) string {
 	return p
 }
 
-var version = "v1.2.1"
+var version = "v1.2.3"
 
 const gitTimeout = 15 * time.Second
 
@@ -529,8 +528,9 @@ func runPostCommand(cfg *Config, l *Logger) error {
 
 func notify(title, body string) {
 	if err := exec.Command("notify-send", title, body).Run(); err != nil {
+		escape := func(s string) string { return strings.ReplaceAll(s, `"`, `\"`) }
 		_ = exec.Command("osascript", "-e",
-			fmt.Sprintf(`display notification "%s" with title "%s"`, body, title)).Run()
+			fmt.Sprintf(`display notification "%s" with title "%s"`, escape(body), escape(title))).Run()
 	}
 }
 
@@ -691,23 +691,14 @@ func backoffDuration(failures int) time.Duration {
 	if failures < 1 {
 		return 0
 	}
-
-	max := 5 * time.Minute
-	d := time.Second
-
-	for i := 1; i < failures; i++ {
-		if d >= max {
-			return max
-		}
-		// guard against overflow on large failure counts
-		if d > (time.Duration(math.MaxInt64) / 2) {
-			return max
-		}
-		d *= 2
+	const maxDuration = 5 * time.Minute
+	shift := uint(failures - 1)
+	if shift >= 9 { // 2^9 s = 512 s > 5 min
+		return maxDuration
 	}
-
-	if d > max {
-		return max
+	d := time.Second << shift
+	if d > maxDuration {
+		return maxDuration
 	}
 	return d
 }
@@ -770,14 +761,8 @@ func watch(ctx context.Context, cfgPath string) {
 	defer ticker.Stop()
 
 	st := &repoState{}
-	running := false
 
 	for {
-		if ctx.Err() != nil {
-			l.info("shutting down (signal received)")
-			return
-		}
-
 		select {
 		case <-ctx.Done():
 			l.info("shutting down (signal received)")
@@ -785,34 +770,28 @@ func watch(ctx context.Context, cfgPath string) {
 		case <-ticker.C:
 		}
 
-		if running {
-			l.warn("previous cycle still running; skipping tick")
+		newCfg, err := loadConfig(cfgPath)
+		if err != nil {
+			l.warn(fmt.Sprintf("invalid config, keeping previous: %v", err))
+		} else {
+			newInterval := time.Duration(newCfg.CheckIntervalSeconds) * time.Second
+			if newInterval != interval {
+				interval = newInterval
+				ticker.Reset(interval)
+			}
+			cfg = newCfg
+		}
+
+		if time.Now().Before(st.backoffUntil) {
+			l.warn(fmt.Sprintf("in backoff until %s", st.backoffUntil.Format(time.RFC3339)))
 			continue
 		}
-		running = true
 
-		func() {
-			defer func() { running = false }()
+		processRepo(cfg, st, runtimeState, l)
 
-			newCfg, err := loadConfig(cfgPath)
-			if err != nil {
-				l.warn(fmt.Sprintf("invalid config, keeping previous: %v", err))
-			} else {
-				cfg = newCfg
-			}
-
-			now := time.Now()
-			if now.Before(st.backoffUntil) {
-				l.warn(fmt.Sprintf("in backoff until %s", st.backoffUntil.Format(time.RFC3339)))
-				return
-			}
-
-			processRepo(cfg, st, runtimeState, l)
-
-			if err := saveRuntimeState(statePath, runtimeState); err != nil {
-				l.warn(fmt.Sprintf("could not persist state: %v", err))
-			}
-		}()
+		if err := saveRuntimeState(statePath, runtimeState); err != nil {
+			l.warn(fmt.Sprintf("could not persist state: %v", err))
+		}
 	}
 }
 
@@ -1274,14 +1253,15 @@ func cmdService(args []string) error {
 
 	case "start", "stop", "restart", "status":
 		out, err := runCommand("systemctl", action, defaultServiceName)
-		if err != nil {
-			return fmt.Errorf("systemctl %s failed: %v\n%s", action, err, out)
-		}
 		if out != "" {
 			fmt.Println(out)
 		}
 		if action == "status" {
+			// systemctl status exits non-zero when the service is inactive; not an error
 			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("systemctl %s failed: %v", action, err)
 		}
 		fmt.Printf("service %s: %s\n", defaultServiceName, action)
 		return nil
@@ -1314,14 +1294,14 @@ const usage = `Usage: autopull [command] [config_path]
 
 Commands:
   (none)           start watching (default config: ./config_auto_pull.json)
-	daemon           start watching in background (detached)
-	start            alias for 'daemon'
+  daemon           start watching in background (detached)
+  start            alias for 'daemon'
   init             create config_auto_pull.json for the current git repo
   status           show daemon status and stats
   stop             send SIGTERM to the running daemon
   logs [N]         print last N lines of the log (default: 50)
   dry-run          validate config and connectivity without pulling
-	service ...      systemd integration (install/start/stop/status/logs)
+  service ...      systemd integration (install/start/stop/status/logs)
   --version, -v    print version
 
 Token for private repos:
