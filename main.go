@@ -95,7 +95,7 @@ func resolveConfigPath(p string) string {
 	return p
 }
 
-var version = "v1.2.3"
+var version = "v1.2.4"
 
 const gitTimeout = 15 * time.Second
 
@@ -460,6 +460,41 @@ func gitRecoveryHints(ahead, behind int, dirty bool) []string {
 		)
 	}
 	return hints
+}
+
+// knownArtifactDirs are top-level directory names that are typically generated
+// by build tools and should not be tracked by git.
+var knownArtifactDirs = []string{
+	".next", "dist", "build", "out", ".nuxt", ".output", ".svelte-kit", ".solid",
+	"node_modules", "vendor",
+	"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+	"target", ".gradle", ".m2",
+	".parcel-cache", "coverage", ".turbo",
+}
+
+// artifactGitignoreHints inspects the dirty file list and returns ready-to-run
+// shell commands for any entries that look like untracked build artifacts.
+func artifactGitignoreHints(statusLines []string) []string {
+	seen := map[string]bool{}
+	var cmds []string
+	for _, line := range statusLines {
+		path := line
+		if len(line) > 3 {
+			path = strings.TrimSpace(line[2:])
+		}
+		top := strings.SplitN(path, "/", 2)[0]
+		for _, dir := range knownArtifactDirs {
+			if strings.EqualFold(top, dir) && !seen[top] {
+				seen[top] = true
+				entry := top + "/"
+				cmds = append(cmds,
+					fmt.Sprintf("echo '%s' >> .gitignore && git rm -r --cached %q && git add .gitignore && git commit -m 'chore: gitignore %s'",
+						entry, top, entry),
+				)
+			}
+		}
+	}
+	return cmds
 }
 
 func gitPullErrorHints(msg string) []string {
@@ -830,8 +865,8 @@ func processRepo(cfg *Config, st *repoState, rs *RuntimeState, l *Logger) {
 		l.warn(fmt.Sprintf("could not compute ahead/behind: %v", err))
 	}
 
-	dirty := isRepoDirty(cfg.RepoPath)
-	if dirty {
+	changes, _ := trackedChanges(cfg.RepoPath)
+	if len(changes) > 0 {
 		switch cfg.GitRecoveryMode {
 		case "stash":
 			out, stashErr := autoStash(cfg.RepoPath)
@@ -842,6 +877,15 @@ func processRepo(cfg *Config, st *repoState, rs *RuntimeState, l *Logger) {
 			l.warn("auto-recovery applied: stashed local changes to continue pull")
 		default:
 			l.warn("working tree has tracked uncommitted changes — skipping pull to avoid conflicts")
+			for _, f := range changes {
+				l.warn("  " + f)
+			}
+			if fixCmds := artifactGitignoreHints(changes); len(fixCmds) > 0 {
+				l.warn("hint: these look like build artifacts — run to fix permanently:")
+				for _, cmd := range fixCmds {
+					l.warn("  " + cmd)
+				}
+			}
 			for _, hint := range gitRecoveryHints(ahead, behind, true) {
 				l.warn("hint: " + hint)
 			}
