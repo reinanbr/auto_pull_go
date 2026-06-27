@@ -72,6 +72,9 @@ func loadDotEnvToken(baseDir string) string {
 			return val
 		}
 	}
+	if scanner.Err() != nil {
+		return ""
+	}
 	return ""
 }
 
@@ -95,7 +98,7 @@ func resolveConfigPath(p string) string {
 	return p
 }
 
-var version = "v1.2.4"
+var version = "v1.2.5"
 
 const gitTimeout = 15 * time.Second
 
@@ -175,6 +178,72 @@ func normalizeRecoveryMode(v string) string {
 		return "hard-reset"
 	default:
 		return "off"
+	}
+}
+
+func configToFile(cfg *Config) configFile {
+	return configFile{
+		RepoPath:             cfg.RepoPath,
+		Branch:               cfg.Branch,
+		CheckIntervalSeconds: cfg.CheckIntervalSeconds,
+		PostPullCommand:      cfg.PostPullCommand,
+		PostPullWorkdir:      cfg.PostPullWorkdir,
+		LogFile:              cfg.LogFile,
+		NotifyOnPull:         cfg.NotifyOnPull,
+		GitRecoveryMode:      cfg.GitRecoveryMode,
+	}
+}
+
+// trackedInIndex returns only those files (relative to repoPath) that git tracks.
+func trackedInIndex(repoPath string, files []string) []string {
+	if len(files) == 0 {
+		return nil
+	}
+	args := append([]string{"ls-files", "--"}, files...)
+	out, err := runGit(repoPath, "", args...)
+	if err != nil || out == "" {
+		return nil
+	}
+	var tracked []string
+	for _, f := range strings.Split(strings.TrimSpace(out), "\n") {
+		if f != "" {
+			tracked = append(tracked, f)
+		}
+	}
+	return tracked
+}
+
+// assumeUnchanged marks files with --assume-unchanged so git status ignores
+// their local modifications. Only meaningful for files already in the index.
+func assumeUnchanged(repoPath string, files []string) {
+	if len(files) == 0 {
+		return
+	}
+	args := append([]string{"update-index", "--assume-unchanged"}, files...)
+	runGit(repoPath, "", args...)
+}
+
+// silenceOwnFiles protects auto_pull's runtime files and config from dirtying
+// the working tree. Called at startup and after every hard-reset (which clears
+// the assume-unchanged bit). Also re-writes the config so recovery settings
+// survive the reset.
+func silenceOwnFiles(cfg *Config, cfgPath string, l *Logger) {
+	candidates := []string{
+		filepath.Base(pidFilePath(cfgPath)),
+		filepath.Base(stateFilePath(cfgPath)),
+		filepath.Base(cfgPath),
+	}
+	if tracked := trackedInIndex(cfg.RepoPath, candidates); len(tracked) > 0 {
+		assumeUnchanged(cfg.RepoPath, tracked)
+		if l != nil {
+			l.info(fmt.Sprintf("silenced %d tracked runtime file(s) via --assume-unchanged: %s",
+				len(tracked), strings.Join(tracked, ", ")))
+		}
+	}
+	// Re-write config so any settings (e.g. git_recovery_mode) that were wiped
+	// by a hard-reset are restored from the in-memory copy.
+	if err := writeConfig(cfgPath, configToFile(cfg)); err != nil && l != nil {
+		l.warn(fmt.Sprintf("could not restore config after reset: %v", err))
 	}
 }
 
@@ -472,8 +541,16 @@ var knownArtifactDirs = []string{
 	".parcel-cache", "coverage", ".turbo",
 }
 
+// knownTransientSuffixes are file suffixes for database WAL/journal temp files
+// generated at runtime that should never be tracked by git.
+var knownTransientSuffixes = []string{".db-shm", ".db-wal", ".db-journal"}
+
+// knownRuntimeFiles are exact filenames that auto_pull writes at runtime.
+var knownRuntimeFiles = []string{".auto_pull.pid", ".auto_pull.state.json"}
+
 // artifactGitignoreHints inspects the dirty file list and returns ready-to-run
-// shell commands for any entries that look like untracked build artifacts.
+// shell commands for any entries that look like untracked build artifacts or
+// runtime-generated files.
 func artifactGitignoreHints(statusLines []string) []string {
 	seen := map[string]bool{}
 	var cmds []string
@@ -482,7 +559,10 @@ func artifactGitignoreHints(statusLines []string) []string {
 		if len(line) > 3 {
 			path = strings.TrimSpace(line[2:])
 		}
+		base := filepath.Base(path)
 		top := strings.SplitN(path, "/", 2)[0]
+
+		// known build artifact directories
 		for _, dir := range knownArtifactDirs {
 			if strings.EqualFold(top, dir) && !seen[top] {
 				seen[top] = true
@@ -490,6 +570,29 @@ func artifactGitignoreHints(statusLines []string) []string {
 				cmds = append(cmds,
 					fmt.Sprintf("echo '%s' >> .gitignore && git rm -r --cached %q && git add .gitignore && git commit -m 'chore: gitignore %s'",
 						entry, top, entry),
+				)
+			}
+		}
+
+		// transient database WAL/journal files
+		for _, suffix := range knownTransientSuffixes {
+			pattern := "*" + suffix
+			if strings.HasSuffix(base, suffix) && !seen[pattern] {
+				seen[pattern] = true
+				cmds = append(cmds,
+					fmt.Sprintf("echo '%s' >> .gitignore && git rm --cached %q && git add .gitignore && git commit -m 'chore: gitignore %s'",
+						pattern, path, pattern),
+				)
+			}
+		}
+
+		// auto_pull own runtime files
+		for _, rf := range knownRuntimeFiles {
+			if base == rf && !seen[rf] {
+				seen[rf] = true
+				cmds = append(cmds,
+					fmt.Sprintf("echo '%s' >> .gitignore && git rm --cached %q && git add .gitignore && git commit -m 'chore: gitignore %s'",
+						rf, path, rf),
 				)
 			}
 		}
@@ -791,6 +894,10 @@ func watch(ctx context.Context, cfgPath string) {
 	}
 	l.info("═══════════════════════════════════════════")
 
+	// Silence auto_pull's own runtime files at startup so they never dirty the
+	// working tree and block pulls.
+	silenceOwnFiles(cfg, cfgPath, l)
+
 	interval := time.Duration(cfg.CheckIntervalSeconds) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -822,7 +929,7 @@ func watch(ctx context.Context, cfgPath string) {
 			continue
 		}
 
-		processRepo(cfg, st, runtimeState, l)
+		processRepo(cfg, cfgPath, st, runtimeState, l)
 
 		if err := saveRuntimeState(statePath, runtimeState); err != nil {
 			l.warn(fmt.Sprintf("could not persist state: %v", err))
@@ -830,7 +937,7 @@ func watch(ctx context.Context, cfgPath string) {
 	}
 }
 
-func processRepo(cfg *Config, st *repoState, rs *RuntimeState, l *Logger) {
+func processRepo(cfg *Config, cfgPath string, st *repoState, rs *RuntimeState, l *Logger) {
 	local, err := localCommit(cfg.RepoPath)
 	if err != nil {
 		st.consecutiveErrors++
@@ -875,6 +982,16 @@ func processRepo(cfg *Config, st *repoState, rs *RuntimeState, l *Logger) {
 				return
 			}
 			l.warn("auto-recovery applied: stashed local changes to continue pull")
+		case "hard-reset":
+			out, resetErr := autoHardReset(cfg.RepoPath, cfg.Branch)
+			if resetErr != nil {
+				l.errLog(fmt.Sprintf("auto-recovery hard-reset (dirty) failed: %v\n%s", resetErr, out))
+				return
+			}
+			l.warn("auto-recovery applied: hard-reset to clear dirty working tree")
+			// hard-reset wipes the assume-unchanged bit and may revert config_auto_pull.json;
+			// restore both so recovery settings survive and runtime files stay quiet.
+			silenceOwnFiles(cfg, cfgPath, l)
 		default:
 			l.warn("working tree has tracked uncommitted changes — skipping pull to avoid conflicts")
 			for _, f := range changes {
@@ -902,6 +1019,7 @@ func processRepo(cfg *Config, st *repoState, rs *RuntimeState, l *Logger) {
 				return
 			}
 			l.warn("auto-recovery applied: hard-reset to origin branch")
+			silenceOwnFiles(cfg, cfgPath, l)
 			local, err = localCommit(cfg.RepoPath)
 			if err != nil {
 				l.errLog(fmt.Sprintf("local commit check failed after hard-reset: %v", err))

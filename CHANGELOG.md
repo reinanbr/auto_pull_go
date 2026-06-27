@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.2.5] - 2026-06-27
+
+### Fixed
+- `hard-reset` recovery mode now also applies when the working tree is dirty (previously it only acted on ahead commits; dirty trees fell through to the skip-pull default).
+- Auto_pull's own runtime files (`.auto_pull.pid`, `.auto_pull.state.json`) are now silenced via `git update-index --assume-unchanged` at daemon startup if they are tracked in git, preventing them from blocking pulls on every cycle.
+- After a `hard-reset`, `config_auto_pull.json` is restored from the in-memory config and marked as assume-unchanged, ensuring settings like `git_recovery_mode` survive the reset.
+
+### Added
+- `silenceOwnFiles()`: called at startup and after every hard-reset to protect auto_pull's own files from dirtying the working tree.
+- `artifactGitignoreHints` now also detects transient database files (`.db-shm`, `.db-wal`, `.db-journal`) and auto_pull runtime files, and suggests the correct `gitignore` + `git rm --cached` commands to fix them permanently.
+
 ## [v1.2.1] - 2026-04-02
 
 ### Changed
