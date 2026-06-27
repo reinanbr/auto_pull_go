@@ -1,0 +1,386 @@
+package autopull
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+const defaultServiceName = "autopull"
+
+func CmdInit(cfgPath string) error {
+	cfgPath = ResolveConfigPath(cfgPath)
+	repoRoot, err := runGit(".", "", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("init requires a git repository: %w", err)
+	}
+	if _, err := os.Stat(cfgPath); err == nil {
+		return fmt.Errorf("config already exists: %s", cfgPath)
+	}
+	branch := detectBranch(repoRoot)
+	cf := configFile{
+		RepoPath:             repoRoot,
+		Branch:               branch,
+		CheckIntervalSeconds: 5,
+		PostPullCommand:      "",
+		PostPullWorkdir:      "",
+		LogFile:              "auto_pull.log",
+		NotifyOnPull:         true,
+		GitRecoveryMode:      "off",
+	}
+	if err := writeConfig(cfgPath, cf); err != nil {
+		return err
+	}
+	fmt.Printf("Created %s\n", cfgPath)
+	fmt.Printf("  repo   : %s\n", repoRoot)
+	fmt.Printf("  branch : %s\n", branch)
+	fmt.Println()
+	fmt.Println("For private repos, set your token in .env:")
+	fmt.Println("  echo 'AUTOPULL_TOKEN=ghp_xxxx' >> .env")
+	fmt.Println("  echo '.env' >> .gitignore")
+	return nil
+}
+
+func CmdStatus(cfgPath string) error {
+	cfgPath = ResolveConfigPath(cfgPath)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		return err
+	}
+	logPath := cfg.LogFile
+	if !filepath.IsAbs(logPath) {
+		logPath = filepath.Join(filepath.Dir(cfgPath), logPath)
+	}
+	pidPath := pidFilePath(cfgPath)
+	pid, pidErr := readPID(pidPath)
+	running := pidErr == nil && processRunning(pid)
+	stopped := pidErr == nil && processStopped(pid)
+	state := loadRuntimeState(stateFilePath(cfgPath))
+
+	fmt.Printf("Config  : %s\n", cfgPath)
+	if pidErr != nil {
+		fmt.Printf("Status  : stopped (no pid file)\n")
+	} else {
+		status := "stopped"
+		if running {
+			status = "running"
+		} else if stopped {
+			status = "stopped (suspended)"
+		}
+		fmt.Printf("Status  : %s (pid %d)\n", status, pid)
+	}
+	fmt.Printf("Pulls   : %d\n", state.Pulls)
+	if !state.LastPull.IsZero() {
+		fmt.Printf("Last pull: %s\n", state.LastPull.Format(time.RFC3339))
+	}
+	if state.ConsecutiveErrors > 0 {
+		fmt.Printf("Errors  : %d consecutive\n", state.ConsecutiveErrors)
+	}
+	if !state.BackoffUntil.IsZero() && time.Now().Before(state.BackoffUntil) {
+		fmt.Printf("Backoff : until %s\n", state.BackoffUntil.Format(time.RFC3339))
+	}
+	if state.LastError != "" {
+		fmt.Printf("Last err: %s\n", state.LastError)
+	}
+	fmt.Printf("Log     : %s\n", logPath)
+
+	fmt.Println("Git     :")
+	branch, err := currentBranch(cfg.RepoPath)
+	if err != nil {
+		fmt.Printf("  branch: failed to read current branch: %v\n", err)
+	} else {
+		fmt.Printf("  branch: %s (config: %s)\n", branch, cfg.Branch)
+	}
+
+	changes, err := TrackedChanges(cfg.RepoPath)
+	if err != nil {
+		fmt.Printf("  dirty : check failed: %v\n", err)
+	} else if len(changes) == 0 {
+		fmt.Printf("  dirty : no tracked local changes\n")
+	} else {
+		fmt.Printf("  dirty : yes (%d tracked change(s))\n", len(changes))
+		for i, line := range changes {
+			if i >= 5 {
+				fmt.Printf("  dirty : ... and %d more\n", len(changes)-i)
+				break
+			}
+			fmt.Printf("  dirty : %s\n", line)
+		}
+	}
+
+	fetchErr := ""
+	if _, err := runGit(cfg.RepoPath, cfg.GithubToken, "fetch", "origin", cfg.Branch); err != nil {
+		fetchErr = err.Error()
+	}
+	if fetchErr != "" {
+		fmt.Printf("  remote: fetch failed: %s\n", fetchErr)
+		for _, hint := range GitPullErrorHints(fetchErr) {
+			fmt.Printf("  hint  : %s\n", hint)
+		}
+	} else {
+		ahead, behind, err := aheadBehind(cfg.RepoPath, cfg.Branch)
+		if err != nil {
+			fmt.Printf("  sync  : failed to compare with origin/%s: %v\n", cfg.Branch, err)
+		} else {
+			fmt.Printf("  sync  : ahead %d, behind %d\n", ahead, behind)
+			for _, hint := range GitRecoveryHints(ahead, behind, len(changes) > 0) {
+				fmt.Printf("  hint  : %s\n", hint)
+			}
+		}
+	}
+	fmt.Printf("Recovery: %s (config git_recovery_mode)\n", cfg.GitRecoveryMode)
+	return nil
+}
+
+func CmdStop(cfgPath string) error {
+	cfgPath = ResolveConfigPath(cfgPath)
+	msg, err := stopProcess(pidFilePath(cfgPath))
+	if err != nil {
+		return err
+	}
+	fmt.Println(msg)
+	return nil
+}
+
+func CmdLogs(cfgPath string, lines int) error {
+	cfgPath = ResolveConfigPath(cfgPath)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		return err
+	}
+	logPath := cfg.LogFile
+	if !filepath.IsAbs(logPath) {
+		logPath = filepath.Join(filepath.Dir(cfgPath), logPath)
+	}
+	out, err := TailFile(logPath, lines)
+	if err != nil {
+		return err
+	}
+	fmt.Println(out)
+	return nil
+}
+
+func CmdDryRun(cfgPath string) error {
+	cfgPath = ResolveConfigPath(cfgPath)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		return fmt.Errorf("config error: %w", err)
+	}
+
+	fmt.Println("=== dry-run: checking configuration ===")
+	fmt.Printf("  config  : %s\n", cfgPath)
+	fmt.Printf("  repo    : %s\n", cfg.RepoPath)
+	fmt.Printf("  branch  : %s\n", cfg.Branch)
+	fmt.Printf("  interval: %ds\n", cfg.CheckIntervalSeconds)
+	if cfg.GithubToken != "" {
+		fmt.Printf("  token   : (set)\n")
+	} else {
+		fmt.Printf("  token   : (not set — public repo or SSH assumed)\n")
+	}
+
+	fmt.Print("  git repo: ")
+	if err := EnsureGitRepo(cfg.RepoPath); err != nil {
+		fmt.Printf("FAIL — %v\n", err)
+		return err
+	}
+	fmt.Println("OK")
+
+	fmt.Print("  fetch   : ")
+	if _, err := runGit(cfg.RepoPath, cfg.GithubToken, "fetch", "origin", cfg.Branch); err != nil {
+		fmt.Printf("FAIL — %v\n", err)
+		return err
+	}
+	fmt.Println("OK")
+
+	fmt.Print("  remote  : ")
+	remote, err := runGit(cfg.RepoPath, cfg.GithubToken, "rev-parse", fmt.Sprintf("origin/%s", cfg.Branch))
+	if err != nil {
+		fmt.Printf("FAIL — %v\n", err)
+		return err
+	}
+	fmt.Printf("%s\n", ShortHash(remote))
+
+	fmt.Println("=== dry-run passed — ready to run autopull ===")
+	return nil
+}
+
+func CmdDaemon(cfgPath string) error {
+	cfgPath = ResolveConfigPath(cfgPath)
+	if _, err := os.Stat(cfgPath); err != nil {
+		return fmt.Errorf("config file not found: %s", cfgPath)
+	}
+
+	pidPath := pidFilePath(cfgPath)
+	if pid, err := readPID(pidPath); err == nil && processRunning(pid) {
+		fmt.Printf("already running in background (pid %d)\n", pid)
+		return nil
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot determine executable path: %w", err)
+	}
+
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("cannot open %s: %w", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	cmd := exec.Command(exe, cfgPath)
+	cmd.Stdin = devNull
+	cmd.Stdout = devNull
+	cmd.Stderr = devNull
+	cmd.Env = os.Environ()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start daemon: %w", err)
+	}
+
+	fmt.Printf("autopull started in background (pid %d)\n", cmd.Process.Pid)
+	fmt.Println("use 'autopull status' and 'autopull logs' to monitor")
+	return nil
+}
+
+func ServiceUser() string {
+	if v := os.Getenv("AUTOPULL_SERVICE_USER"); strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if v := os.Getenv("SUDO_USER"); strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if v := os.Getenv("USER"); strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+func SystemdUnitContent(execPath, cfgPath, runAsUser string) string {
+	return fmt.Sprintf(`[Unit]
+Description=autopull watcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%q %q
+Restart=always
+RestartSec=3
+User=%s
+
+[Install]
+WantedBy=multi-user.target
+`, execPath, cfgPath, runAsUser)
+}
+
+func runCommand(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	out, err := cmd.CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func CmdService(args []string) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("service command is only available on Linux")
+	}
+	if len(args) == 0 {
+		return fmt.Errorf("usage: autopull service <install|uninstall|start|stop|restart|status|logs> [config|lines]")
+	}
+
+	action := args[0]
+
+	switch action {
+	case "install":
+		cfgPath := ""
+		if len(args) > 1 {
+			cfgPath = args[1]
+		}
+		cfgPath = ResolveConfigPath(cfgPath)
+		if _, err := os.Stat(cfgPath); err != nil {
+			return fmt.Errorf("config file not found: %s", cfgPath)
+		}
+
+		execPath, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("cannot determine executable path: %w", err)
+		}
+		execPath, _ = filepath.Abs(execPath)
+
+		runAsUser := ServiceUser()
+		if runAsUser == "" {
+			return fmt.Errorf("could not determine service user; set AUTOPULL_SERVICE_USER")
+		}
+
+		servicePath := filepath.Join("/etc/systemd/system", defaultServiceName+".service")
+		content := SystemdUnitContent(execPath, cfgPath, runAsUser)
+
+		if err := os.WriteFile(servicePath, []byte(content), 0644); err != nil {
+			return fmt.Errorf("failed to write %s (try with sudo): %w", servicePath, err)
+		}
+
+		if out, err := runCommand("systemctl", "daemon-reload"); err != nil {
+			return fmt.Errorf("systemctl daemon-reload failed: %v\n%s", err, out)
+		}
+		if out, err := runCommand("systemctl", "enable", "--now", defaultServiceName); err != nil {
+			return fmt.Errorf("systemctl enable --now failed: %v\n%s", err, out)
+		}
+
+		fmt.Printf("installed and started systemd service: %s\n", defaultServiceName)
+		return nil
+
+	case "uninstall":
+		if out, err := runCommand("systemctl", "disable", "--now", defaultServiceName); err != nil {
+			// keep going even if service wasn't active
+			fmt.Fprintf(os.Stderr, "warning: disable failed: %v\n%s\n", err, out)
+		}
+		servicePath := filepath.Join("/etc/systemd/system", defaultServiceName+".service")
+		if err := os.Remove(servicePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed removing %s: %w", servicePath, err)
+		}
+		if out, err := runCommand("systemctl", "daemon-reload"); err != nil {
+			return fmt.Errorf("systemctl daemon-reload failed: %v\n%s", err, out)
+		}
+		fmt.Printf("uninstalled systemd service: %s\n", defaultServiceName)
+		return nil
+
+	case "start", "stop", "restart", "status":
+		out, err := runCommand("systemctl", action, defaultServiceName)
+		if out != "" {
+			fmt.Println(out)
+		}
+		if action == "status" {
+			// systemctl status exits non-zero when the service is inactive; not an error
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("systemctl %s failed: %v", action, err)
+		}
+		fmt.Printf("service %s: %s\n", defaultServiceName, action)
+		return nil
+
+	case "logs":
+		lines := "50"
+		if len(args) > 1 {
+			if _, err := strconv.Atoi(args[1]); err != nil {
+				return fmt.Errorf("logs expects a numeric line count")
+			}
+			lines = args[1]
+		}
+		out, err := runCommand("journalctl", "-u", defaultServiceName, "-n", lines, "--no-pager")
+		if err != nil {
+			return fmt.Errorf("journalctl failed: %v\n%s", err, out)
+		}
+		fmt.Println(out)
+		return nil
+
+	default:
+		return fmt.Errorf("unknown service action: %s", action)
+	}
+}

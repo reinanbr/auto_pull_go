@@ -26,9 +26,9 @@ curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.
 Manual install (from local build artifact):
 
 ```bash
-./scripts/release-linux.sh v1.2.3
-tar -xzf dist/auto_pull_linux_amd64_v1.2.3.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.2.3
+./scripts/release-linux.sh v1.2.5
+tar -xzf dist/auto_pull_linux_amd64_v1.2.5.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.2.5
 sudo ./install.sh
 ```
 
@@ -39,6 +39,12 @@ go build -o autopull .
 ```
 
 Then move `autopull` somewhere on `PATH`, e.g. `/usr/local/bin/`.
+
+Run tests:
+
+```bash
+go test ./...
+```
 
 ---
 
@@ -246,11 +252,11 @@ Environment=AUTOPULL_TOKEN=ghp_xxxxxxxxxxxx
 
 ```bash
 # build portable tar.gz
-./scripts/release-linux.sh v1.2.3
+./scripts/release-linux.sh v1.2.5
 
 # install
-tar -xzf dist/auto_pull_linux_amd64_v1.2.3.tar.gz -C /tmp
-cd /tmp/auto_pull_linux_amd64_v1.2.3
+tar -xzf dist/auto_pull_linux_amd64_v1.2.5.tar.gz -C /tmp
+cd /tmp/auto_pull_linux_amd64_v1.2.5
 sudo ./install.sh
 
 # uninstall
@@ -291,6 +297,47 @@ sudo ./uninstall.sh --purge
 | `.auto_pull.state.json` | Pull count, last pull time, error state, backoff |
 | `auto_pull.log` | Daemon log (path set by `log_file`) |
 | `auto_pull.log.1` | Previous log, kept after rotation |
+
+---
+
+## Development
+
+Project layout (Go 1.21+, module `github.com/reinanbr/auto_pull_go`):
+
+```
+auto_pull/
+├── main.go              — CLI entry point and command routing
+├── autopull/            — core package (package autopull)
+│   ├── config.go        — Config type, LoadConfig, token resolution
+│   ├── logger.go        — structured logger with rotation
+│   ├── git.go           — fetch/pull, dirty check, recovery hints
+│   ├── state.go         — PID/state files, backoff, TailFile
+│   ├── watcher.go       — main watch loop, RunWatcher
+│   └── commands.go      — CmdInit, CmdDaemon, CmdStatus, CmdStop, CmdLogs, CmdDryRun, CmdService
+└── tests/               — external test suite (package tests)
+    ├── config_test.go
+    ├── git_test.go
+    ├── state_test.go
+    └── commands_test.go
+```
+
+Build:
+
+```bash
+go build -o autopull .
+```
+
+Test:
+
+```bash
+go test ./...
+```
+
+Coverage:
+
+```bash
+go test ./... -coverprofile=cover.out && go tool cover -func=cover.out
+```
 
 ---
 
