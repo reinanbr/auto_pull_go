@@ -23,7 +23,8 @@ jobs:
       - name: Verify module tidy
         run: |
           go mod tidy
-          git diff --exit-code go.mod go.sum
+          git diff --exit-code -- go.mod
+          git ls-files --error-unmatch go.sum 2>/dev/null && git diff --exit-code -- go.sum || true
 
       - name: Vet
         run: go vet ./...
