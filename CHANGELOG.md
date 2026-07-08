@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.2.7] - 2026-07-08
+
+### Changed
+- README `post_pull_command` examples expanded to cover more Docker deployment scenarios: `docker compose up -d --build`, single-service rebuild (`--no-deps <service>`), restart-only, full recreate (`down && up`), plain `docker run`, Docker Swarm (`docker service update`), and Kubernetes (`kubectl rollout restart`) as a bonus for non-Docker orchestration.
+- Version bumped to v1.2.7.
+
 ## [v1.2.5] - 2026-06-27
 
 ### Fixed

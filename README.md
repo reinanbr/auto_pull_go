@@ -276,14 +276,50 @@ sudo ./uninstall.sh --purge
 "post_pull_command": "systemctl restart myapp"
 ```
 ```json
-"post_pull_command": "docker compose up -d --build"
-```
-```json
 "post_pull_command": "npm ci --silent && pm2 reload ecosystem.config.js"
 ```
 ```json
 "post_pull_command": "go build -o bin/app . && ./bin/app"
 ```
+
+### Docker
+
+Pick the flavor that matches how the service is deployed:
+
+```json
+"post_pull_command": "docker compose up -d --build"
+```
+Rebuilds the image(s) when the Dockerfile or dependencies changed. Slower, but always in sync with the pulled code.
+
+```json
+"post_pull_command": "docker compose up -d --build --no-deps <service>"
+```
+Rebuilds and restarts a single service in a multi-service stack, leaving the rest untouched.
+
+```json
+"post_pull_command": "docker compose restart"
+```
+Just restarts the running containers without rebuilding — fast, but only correct if the image doesn't need to change (e.g. bind-mounted source, interpreted languages).
+
+```json
+"post_pull_command": "docker compose down && docker compose up -d --build"
+```
+Full recreate: tears the stack down before bringing it back up. More downtime, but clears stale networks/volumes state — useful after compose file changes.
+
+```json
+"post_pull_command": "docker build -t myapp:latest . && docker stop myapp && docker rm myapp && docker run -d --name myapp -p 8080:8080 myapp:latest"
+```
+Single container without compose.
+
+```json
+"post_pull_command": "docker build -t registry.local/myapp:latest . && docker push registry.local/myapp:latest && docker service update --image registry.local/myapp:latest myapp_stack"
+```
+Docker Swarm: build, push to the registry, and roll the service.
+
+```json
+"post_pull_command": "kubectl rollout restart deployment/myapp"
+```
+Kubernetes: not Docker directly, but the same post-pull hook works for triggering a rolling restart.
 
 `post_pull_command` is executed via `sh -c` in `post_pull_workdir`. Treat the config as trusted input.
 

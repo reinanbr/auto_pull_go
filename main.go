@@ -9,7 +9,7 @@ import (
 	"github.com/reinanbr/auto_pull_go/autopull"
 )
 
-var version = "v1.2.6"
+var version = "v1.2.7"
 
 const usage = `Usage: autopull [command] [config_path]
 
