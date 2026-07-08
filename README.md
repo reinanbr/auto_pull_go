@@ -3,7 +3,6 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/reinanbr/auto_pull_go/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white)](https://github.com/reinanbr/auto_pull_go/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/reinanbr/auto_pull_go?label=release&logo=github)](https://github.com/reinanbr/auto_pull_go/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/reinanbr/auto_pull_go/total?label=downloads&logo=github)](https://github.com/reinanbr/auto_pull_go/releases)
-[![Go Report Card](https://goreportcard.com/badge/github.com/reinanbr/auto_pull_go)](https://goreportcard.com/report/github.com/reinanbr/auto_pull_go)
 [![Go version](https://img.shields.io/github/go-mod/go-version/reinanbr/auto_pull_go)](go.mod)
 [![License: MIT](https://img.shields.io/github/license/reinanbr/auto_pull_go)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS-informational?logo=linux&logoColor=white)](#linux-packaging)
