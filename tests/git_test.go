@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/reinanbr/auto_pull_go/autopull"
+	"github.com/reinanbr/autopull/autopull"
 )
 
 // ─── ShortHash ───────────────────────────────

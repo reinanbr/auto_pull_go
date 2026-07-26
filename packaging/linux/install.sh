@@ -118,7 +118,7 @@ printf '\n\033[1mInstalling autopull...\033[0m\n\n'
 [ -f "${BIN_SRC}" ] || die "Binary not found: ${BIN_SRC}
          Build it first:  go build -o packaging/linux/auto_pull main.go
          Or download a release bundle from:
-         https://github.com/reinanbr/auto_pull_go/releases"
+         https://github.com/reinanbr/autopull/releases"
 
 [ -f "${CFG_EXAMPLE}" ] || die "Config example not found: ${CFG_EXAMPLE}"
 

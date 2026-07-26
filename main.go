@@ -6,10 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/reinanbr/auto_pull_go/autopull"
+	"github.com/reinanbr/autopull/autopull"
 )
 
-var version = "v1.2.7"
+var version = "v1.2.8"
 
 const usage = `Usage: autopull [command] [config_path]
 
@@ -40,7 +40,7 @@ func main() {
 
 	switch args[0] {
 	case "--version", "-v":
-		fmt.Println("auto_pull", version)
+		fmt.Println("autopull", version)
 		return
 
 	case "--help", "-h":

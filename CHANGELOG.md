@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.2.8] - 2026-07-26
+
+### Changed
+- Repository renamed to `autopull`; module path is now `github.com/reinanbr/autopull`.
+- All GitHub URLs (README badges/links, `install.sh`, `packaging/linux/install.sh`) updated to point at `reinanbr/autopull`.
+- `autopull --version` now prints `autopull` instead of `auto_pull`.
+- Version bumped to v1.2.8.
+
+### Added
+- `CONTRIBUTING.md` with the development workflow, pre-PR checks, and release steps.
+
 ## [v1.2.7] - 2026-07-08
 
 ### Changed

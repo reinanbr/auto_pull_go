@@ -1,10 +1,10 @@
 # autopull
 
-[![CI](https://img.shields.io/github/actions/workflow/status/reinanbr/auto_pull_go/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white)](https://github.com/reinanbr/auto_pull_go/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/reinanbr/auto_pull_go?label=release&logo=github)](https://github.com/reinanbr/auto_pull_go/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/reinanbr/auto_pull_go/total?label=downloads&logo=github)](https://github.com/reinanbr/auto_pull_go/releases)
-[![Go version](https://img.shields.io/github/go-mod/go-version/reinanbr/auto_pull_go)](go.mod)
-[![License: MIT](https://img.shields.io/github/license/reinanbr/auto_pull_go)](LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/reinanbr/autopull/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white)](https://github.com/reinanbr/autopull/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/reinanbr/autopull?label=release&logo=github)](https://github.com/reinanbr/autopull/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/reinanbr/autopull/total?label=downloads&logo=github)](https://github.com/reinanbr/autopull/releases)
+[![Go version](https://img.shields.io/github/go-mod/go-version/reinanbr/autopull)](go.mod)
+[![License: MIT](https://img.shields.io/github/license/reinanbr/autopull)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS-informational?logo=linux&logoColor=white)](#linux-packaging)
 
 Watches a git repository and runs `git pull` whenever a new commit lands on the tracked branch. Optionally runs a command after each pull.
@@ -18,7 +18,7 @@ Pure Go · zero dependencies · Linux & macOS · systemd-ready
 Quick installer (auto-detects Linux/macOS, amd64/arm64):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/reinanbr/autopull/main/install.sh | sh
 ```
 
 - Downloads the latest release binary and installs to `/usr/local/bin/autopull`.
@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.
 Uninstall:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.sh | sh -s -- uninstall
+curl -fsSL https://raw.githubusercontent.com/reinanbr/autopull/main/install.sh | sh -s -- uninstall
 ```
 
 Manual install (from local build artifact):
@@ -345,7 +345,7 @@ Kubernetes: not Docker directly, but the same post-pull hook works for triggerin
 
 ## Development
 
-Project layout (Go 1.21+, module `github.com/reinanbr/auto_pull_go`):
+Project layout (Go 1.21+, module `github.com/reinanbr/autopull`):
 
 ```
 auto_pull/
@@ -381,6 +381,8 @@ Coverage:
 ```bash
 go test ./... -coverprofile=cover.out && go tool cover -func=cover.out
 ```
+
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and checks.
 
 ---
 

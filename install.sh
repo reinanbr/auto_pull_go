@@ -1,12 +1,12 @@
 #!/bin/sh
 # autopull installer
 # Usage:
-#   Install:   curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.sh | sh
-#   Uninstall: curl -fsSL https://raw.githubusercontent.com/reinanbr/auto_pull_go/main/install.sh | sh -s -- uninstall
+#   Install:   curl -fsSL https://raw.githubusercontent.com/reinanbr/autopull/main/install.sh | sh
+#   Uninstall: curl -fsSL https://raw.githubusercontent.com/reinanbr/autopull/main/install.sh | sh -s -- uninstall
 
 set -e
 
-REPO="reinanbr/auto_pull_go"
+REPO="reinanbr/autopull"
 BINARY="autopull"
 INSTALL_DIR="/usr/local/bin"
 MODULE_BIN="$(printf "%s" "$REPO" | awk -F/ '{print $NF}')"
@@ -148,7 +148,7 @@ if [ "$ACTION" = "install" ]; then
                 GO_BIN="$(go env GOPATH)/bin"
             fi
 
-            GO111MODULE=on go install "github.com/reinanbr/auto_pull_go@${VERSION}" \
+            GO111MODULE=on go install "github.com/reinanbr/autopull@${VERSION}" \
                 || die "go install failed; please install Go 1.21+ or provide a release binary"
 
             for candidate in "${GO_BIN}/${BINARY}" "${GO_BIN}/${MODULE_BIN}"; do
